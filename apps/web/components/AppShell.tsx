@@ -13,6 +13,8 @@ import AuthUI from './AuthUI';
 import SetupCopilot from './SetupCopilot';
 import AgentWorkspace from './AgentWorkspace';
 import NewRunModal from './NewRunModal';
+import AgentDefaults from './AgentDefaults';
+import AssistantBot from './AssistantBot';
 import type { AgentRun } from '@/services/agentOrchestrator';
 
 const ACTIVE_KEY       = 'openpilot_active_id';
@@ -52,7 +54,7 @@ function AppShellInner() {
       .catch(() => setCredChecked(true));
   }, []);
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'chat' | 'docs' | 'autopilot' | 'apikeys'>('chat');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'chat' | 'docs' | 'autopilot' | 'apikeys' | 'settings'>('chat');
   const [model, setModel] = useState('');
   const [mode, setMode]   = useState<Mode>('ask');
   const [reasoningEffort, setReasoningEffort] = useState('');
@@ -287,9 +289,9 @@ function AppShellInner() {
     );
   }
 
-  // If credentials are configured but the user isn't signed in, show the login screen
-  if (hasCredentials && !session) {
-    return <LoginScreen />;
+  // Always require authentication — even on first boot before OAuth is configured
+  if (!session) {
+    return <LoginScreen hasCredentials={hasCredentials} />;
   }
 
   return (
@@ -339,6 +341,7 @@ function AppShellInner() {
             {activeTab === 'dashboard' && <Dashboard agentRuns={agentRuns} conversations={conversations} onSelectRun={(id) => { setActiveRunId(id); setActiveTab('autopilot'); }} onSelectConv={(id) => { setActiveId(id); setActiveTab('chat'); }} />}
             {activeTab === 'docs'      && <Documentation />}
             {activeTab === 'apikeys'   && <ApiKeysManager />}
+            {activeTab === 'settings'  && <AgentDefaults />}
             {activeTab === 'chat'      && hydrated && activeConversation && (
               <ChatBox
                 key={activeConversation.id}
@@ -383,6 +386,12 @@ function AppShellInner() {
           onClose={() => setShowNewRunModal(false)}
         />
       )}
+      <AssistantBot
+        activeTab={activeTab}
+        onNavigate={(tab) => setActiveTab(tab)}
+        onNewRun={() => setShowNewRunModal(true)}
+        onNewChat={handleNew}
+      />
     </>
   );
 }

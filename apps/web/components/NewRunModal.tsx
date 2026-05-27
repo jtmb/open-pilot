@@ -282,7 +282,7 @@ export default function NewRunModal({ onStart, onClose }: Props) {
             <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">
               Agent Type
             </label>
-            <div className="relative flex items-stretch gap-1" style={{ height: '6.5rem' }}>
+            <div className="relative flex items-stretch gap-1" style={{ height: '4.5rem' }}>
               <button
                 type="button"
                 onClick={() => navigate(-1)}
@@ -303,9 +303,13 @@ export default function NewRunModal({ onStart, onClose }: Props) {
                       <button
                         key={i}
                         type="button"
-                        style={{ flexShrink: 0, width: isCenter ? '44%' : '26%' }}
+                        style={{
+                          flexShrink: 0,
+                          width: isCenter ? '44%' : '26%',
+                          transition: 'width 220ms cubic-bezier(0.4,0,0.2,1)',
+                        }}
                         onClick={() => { if (i === 1) navigate(-1); else if (i === 3) navigate(1); }}
-                        className={`flex flex-col items-center justify-center gap-1 p-3 rounded-lg border-2 text-center overflow-hidden h-full ${
+                        className={`flex flex-col items-center justify-center gap-1 p-2 rounded-lg border-2 text-center h-full ${
                           isEdge ? 'border-transparent opacity-0 pointer-events-none'
                           : isCenter ? 'border-blue-500 bg-blue-50 shadow-sm'
                           : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50 opacity-60 cursor-pointer'
@@ -313,26 +317,15 @@ export default function NewRunModal({ onStart, onClose }: Props) {
                       >
                         <span style={{
                           display: 'inline-block',
-                          fontSize: isBig ? '1.875rem' : '1.25rem',
+                          fontSize: isBig ? '1.75rem' : '1.125rem',
                           lineHeight: 1,
                           flexShrink: 0,
                           transition: 'font-size 220ms ease',
                         }}>{p.icon}</span>
                         <span
-                          className="font-semibold text-gray-800"
-                          style={{ fontSize: isBig ? '0.875rem' : '0.75rem', flexShrink: 0, transition: 'font-size 220ms ease' }}
+                          className="font-semibold text-gray-800 leading-tight"
+                          style={{ fontSize: isBig ? '0.8125rem' : '0.6875rem', flexShrink: 0, transition: 'font-size 220ms ease' }}
                         >{p.label}</span>
-                        <span
-                          className="text-gray-500 leading-tight line-clamp-2"
-                          style={{
-                            fontSize: '0.75rem',
-                            opacity: isBig ? 1 : 0,
-                            width: '100%',
-                            flexShrink: 1,
-                            minHeight: 0,
-                            transition: 'opacity 220ms ease',
-                          }}
-                        >{p.description}</span>
                       </button>
                     );
                   })}
@@ -362,6 +355,16 @@ export default function NewRunModal({ onStart, onClose }: Props) {
                 />
               ))}
             </div>
+            {/* Description — lives outside the strip to avoid height jank */}
+            <p
+              className="text-xs text-gray-500 text-center leading-snug mt-1.5 min-h-[2rem] px-2"
+              style={{
+                opacity: nextCenterIdx !== null ? 0 : 1,
+                transition: 'opacity 180ms ease',
+              }}
+            >
+              {_pList[centerIdx].description}
+            </p>
           </div>
 
           {/* Title */}
