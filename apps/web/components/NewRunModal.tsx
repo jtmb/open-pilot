@@ -26,6 +26,8 @@ interface SavedRunPrefs {
 interface Props {
   onStart: (run: AgentRun) => void;
   onClose: () => void;
+  initialSpec?: string;
+  initialTitle?: string;
 }
 
 function ModelPicker({
@@ -87,7 +89,7 @@ function ModelPicker({
   );
 }
 
-export default function NewRunModal({ onStart, onClose }: Props) {
+export default function NewRunModal({ onStart, onClose, initialSpec, initialTitle }: Props) {
   const [models, setModels] = useState<CopilotModel[]>([]);
   const [title, setTitle] = useState('');
   const [spec, setSpec] = useState('');
@@ -105,6 +107,13 @@ export default function NewRunModal({ onStart, onClose }: Props) {
   const [continueFromRepo, setContinueFromRepo] = useState(false);
   const [existingRepoUrl, setExistingRepoUrl] = useState('');
   const [featureBranch, setFeatureBranch] = useState('');
+
+  // Pre-fill spec and title when coming from a completed run
+  useEffect(() => {
+    if (initialSpec) setSpec(initialSpec);
+    if (initialTitle) setTitle(initialTitle);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSpec, initialTitle]);
 
   // Fill with AI
   const [fillModel, setFillModel] = useState('');
@@ -282,7 +291,7 @@ export default function NewRunModal({ onStart, onClose }: Props) {
             <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">
               Agent Type
             </label>
-            <div className="relative flex items-stretch gap-1" style={{ height: '3.25rem' }}>
+            <div className="relative flex items-stretch gap-1" style={{ height: '5rem' }}>
               <button
                 type="button"
                 onClick={() => navigate(-1)}
@@ -305,7 +314,7 @@ export default function NewRunModal({ onStart, onClose }: Props) {
                         type="button"
                         style={{
                           flexShrink: 0,
-                          width: isCenter ? '44%' : '26%',
+                          width: isCenter ? 'calc(44% - 7px)' : 'calc(28% - 4.5px)',
                           transition: 'width 220ms cubic-bezier(0.4,0,0.2,1)',
                         }}
                         onClick={() => { if (i === 1) navigate(-1); else if (i === 3) navigate(1); }}
@@ -317,14 +326,14 @@ export default function NewRunModal({ onStart, onClose }: Props) {
                       >
                         <span style={{
                           display: 'inline-block',
-                          fontSize: isBig ? '1.25rem' : '0.875rem',
+                          fontSize: isBig ? '1.625rem' : '1rem',
                           lineHeight: 1,
                           flexShrink: 0,
                           transition: 'font-size 220ms ease',
                         }}>{p.icon}</span>
                         <span
                           className="font-semibold text-gray-800 leading-tight"
-                          style={{ fontSize: isBig ? '0.6875rem' : '0.5625rem', flexShrink: 0, transition: 'font-size 220ms ease' }}
+                          style={{ fontSize: isBig ? '0.75rem' : '0.625rem', flexShrink: 0, transition: 'font-size 220ms ease' }}
                         >{p.label}</span>
                       </button>
                     );
@@ -424,6 +433,7 @@ export default function NewRunModal({ onStart, onClose }: Props) {
               placeholder={personalities[category]?.specPlaceholder ?? 'Describe what you want built. Be specific: features, tech stack, file structure, constraints…'}
               value={spec}
               onChange={e => setSpec(e.target.value)}
+              rows={7}
               required
             />
           </div>

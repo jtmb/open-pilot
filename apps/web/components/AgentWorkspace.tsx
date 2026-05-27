@@ -8,11 +8,14 @@ import { bestFreeModel, type CopilotModel } from './ModelSelector';
 import {
   applyReply,
   getStepPayload,
+  getSystemPrompts,
   logEntry,
   makeLogId,
   parseTokens,
+  personalities,
   type AgentRun,
   type Checkpoint,
+  type PersonalityId,
   type RunStatus,
 } from '@/services/agentOrchestrator';
 import CheckpointsPanel from './CheckpointsPanel';
@@ -134,6 +137,7 @@ interface Props {
   run: AgentRun;
   onUpdate: (run: AgentRun) => void;
   onDelete: () => void;
+  onNewPersonalityRun?: (spec: string, title: string) => void;
 }
 
 const STATUS_BADGE: Record<RunStatus, { label: string; cls: string }> = {
@@ -144,7 +148,7 @@ const STATUS_BADGE: Record<RunStatus, { label: string; cls: string }> = {
   error:    { label: 'Error',    cls: 'bg-red-100 text-red-700'     },
 };
 
-export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: Props) {
+export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, onNewPersonalityRun }: Props) {
   const [run, setRun] = useState<AgentRun>(initialRun);
   const [isStepping, setIsStepping] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
@@ -157,6 +161,10 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
   const [highlightedEntryId, setHighlightedEntryId] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [restartConfirm, setRestartConfirm] = useState(false);
+  const [continueSpec, setContinueSpec] = useState('');
+  const [continueAiLoading, setContinueAiLoading] = useState(false);
+  const [continuePersonality, setContinuePersonality] = useState<string>(initialRun.config.category ?? 'developer');
+  const [continueExpanded, setContinueExpanded] = useState(false);
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Monitor state
@@ -737,6 +745,22 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
     executeLoop();
   }, [executeLoop, setRunAndSync]);
 
+  // ── Auto-start preview on mount ──────────────────────────────────────────
+  // If the run already has a serve command and a passing build (previewUnlocked),
+  // restart the preview server — this handles page reloads and container restarts.
+  useEffect(() => {
+    if (!initialRun.previewCommand || !initialRun.previewUnlocked) return;
+    fetch('/api/exec/serve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: initialRun.previewCommand, runId: initialRun.id }),
+    })
+      .then(r => r.json() as Promise<{ url?: string }>)
+      .then(d => { if (d.url) setPreviewUrl(d.url); })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Auto-resume on startup (server-restart recovery) ─────────────────────
   // If this run is in 'error' state when first mounted, it was interrupted by a
   // server restart — auto-resume it after a brief delay so the UI can settle.
@@ -764,6 +788,58 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
     };
     setRunAndSync(stopped);
   }, [setRunAndSync]);
+
+  const handleContinueAiFill = useCallback(async () => {
+    if (!continueSpec.trim() || continueAiLoading) return;
+    setContinueAiLoading(true);
+    try {
+      const prompt = `You are a software architect. A project titled "${runRef.current.title}" was just completed. The user wants to add the following to it. Expand this brief into a clear, detailed list of technical requirements and acceptance criteria:\n\n${continueSpec.trim()}`;
+      const res = await fetch('/api/copilot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, model: runRef.current.config.managerModel, mode: 'plan' }),
+      });
+      const data = await res.json() as { result?: string };
+      if (data.result) setContinueSpec(data.result);
+    } catch { /* ignore */ } finally {
+      setContinueAiLoading(false);
+    }
+  }, [continueSpec, continueAiLoading]);
+
+  const handleContinueWithSpecs = useCallback(() => {
+    if (!continueSpec.trim()) return;
+    const r = runRef.current;
+    const msg =
+      `The original specification has been completed. Here are additional requirements to implement:\n\n${continueSpec.trim()}\n\nPlease assign the first new task to the worker.`;
+
+    // Swap personality system prompts if the user changed it
+    const currentCategory = r.config.category ?? 'developer';
+    let newWorkerHistory = r.workerHistory;
+    let newManagerHistory = r.managerHistory;
+    if (continuePersonality !== currentCategory) {
+      const { worker: ws, manager: ms } = getSystemPrompts(continuePersonality);
+      newWorkerHistory = r.workerHistory.map((m, i) =>
+        i === 0 && m.role === 'system' ? { ...m, content: ws } : m
+      );
+      newManagerHistory = r.managerHistory.map((m, i) =>
+        i === 0 && m.role === 'system' ? { ...m, content: ms } : m
+      );
+    }
+
+    const updated: AgentRun = {
+      ...r,
+      status: 'running' as RunStatus,
+      nextStep: 'manager-review' as const,
+      config: { ...r.config, category: continuePersonality as PersonalityId },
+      workerHistory: newWorkerHistory,
+      managerHistory: [...newManagerHistory, { role: 'user' as const, content: msg }],
+      log: [...r.log, logEntry('user', 'user-input', `📋 Additional requirements added:\n${continueSpec.trim()}`, 'both')],
+      updatedAt: Date.now(),
+    };
+    setContinueSpec('');
+    setRunAndSync(updated);
+    executeLoop();
+  }, [continueSpec, continuePersonality, setRunAndSync, executeLoop]);
 
   const handleRestart = useCallback(() => {
     if (!restartConfirm) {
@@ -1309,6 +1385,191 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
           run={run}
           onClose={() => setFilesOpen(false)}
         />
+      )}
+
+      {/* ── Build completion banner ── */}
+      {run.status === 'complete' && (
+        <div className="shrink-0 border-t-2 border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-950/40 px-5 py-4">
+          <div className="flex items-start gap-3">
+            <span className="text-xl mt-0.5">✅</span>
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-green-800 dark:text-green-300 text-sm">
+                Build complete — {run.currentIteration} step{run.currentIteration !== 1 ? 's' : ''}
+              </p>
+              <p className="text-xs text-green-700/70 dark:text-green-400/60 mt-0.5">
+                All specification items have been implemented. What would you like to do next?
+              </p>
+
+              {/* Quick actions row */}
+              <div className="flex flex-wrap items-center gap-2 mt-3">
+                {previewUrl && (
+                  <a
+                    href={previewUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors"
+                  >
+                    ↗ Open Build
+                  </a>
+                )}
+                {run.previewCommand && run.previewUnlocked && !previewUrl && (
+                  <button
+                    onClick={() => {
+                      fetch('/api/exec/serve', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ command: run.previewCommand, runId: run.id }),
+                      })
+                        .then(r => r.json() as Promise<{ url?: string }>)
+                        .then(d => { if (d.url) setPreviewUrl(d.url); })
+                        .catch(() => {});
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors"
+                  >
+                    ▶ Open Build
+                  </button>
+                )}
+                {onNewPersonalityRun && (
+                  <button
+                    onClick={() => onNewPersonalityRun(run.spec, run.title)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                  >
+                    🎭 New run · different personality
+                  </button>
+                )}
+              </div>
+
+              {/* Continue with additional specs */}
+              <div className="mt-3">
+                <p className="text-xs font-medium text-green-800 dark:text-green-300 mb-1.5">
+                  Or continue with additional requirements:
+                </p>
+                {/* Textarea with loading overlay + expand button */}
+                <div className="relative">
+                  <textarea
+                    rows={3}
+                    className={`w-full border border-green-200 dark:border-green-700 rounded-lg px-3 py-2 pr-8 text-sm resize-y bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-green-500 min-h-[4.5rem] transition-opacity${continueAiLoading ? ' opacity-40 cursor-not-allowed' : ''}`}
+                    placeholder="Describe additional features or changes to implement…"
+                    value={continueSpec}
+                    readOnly={continueAiLoading}
+                    onChange={e => setContinueSpec(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && !e.shiftKey && !continueAiLoading) {
+                        e.preventDefault();
+                        handleContinueWithSpecs();
+                      }
+                    }}
+                  />
+                  {/* Expand to full-screen */}
+                  <button
+                    onClick={() => setContinueExpanded(true)}
+                    className="absolute top-1.5 right-1.5 p-0.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
+                    title="Expand"
+                    tabIndex={-1}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+                      <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+                    </svg>
+                  </button>
+                  {/* Loading overlay */}
+                  {continueAiLoading && (
+                    <div className="absolute inset-0 flex items-center justify-center rounded-lg pointer-events-none">
+                      <span className="text-xs font-medium text-indigo-600 dark:text-indigo-400 animate-pulse bg-white/80 dark:bg-gray-800/80 px-3 py-1 rounded-full">
+                        ✨ Generating plan…
+                      </span>
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                  <button
+                    onClick={handleContinueAiFill}
+                    disabled={!continueSpec.trim() || continueAiLoading}
+                    className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-indigo-200 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    ✨ Plan with AI
+                  </button>
+                  <select
+                    value={continuePersonality}
+                    onChange={e => setContinuePersonality(e.target.value)}
+                    className="border border-gray-200 dark:border-gray-600 rounded-md px-2 py-1 text-xs bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-green-500 cursor-pointer"
+                    title="Personality for continuation"
+                  >
+                    {Object.values(personalities).map(p => (
+                      <option key={p.id} value={p.id}>{p.icon} {p.label}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={handleContinueWithSpecs}
+                    disabled={!continueSpec.trim() || continueAiLoading}
+                    className="ml-auto flex items-center gap-1 px-3 py-1 text-xs font-semibold rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+                  >
+                    + Continue →
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Continue spec full-screen modal ── */}
+      {continueExpanded && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white dark:bg-gray-900 rounded-xl shadow-2xl w-full max-w-2xl flex flex-col" style={{ height: '80vh' }}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 shrink-0">
+              <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">Additional requirements</p>
+              <button
+                onClick={() => setContinueExpanded(false)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-lg leading-none transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="relative flex-1 min-h-0">
+              <textarea
+                className={`w-full h-full resize-none px-4 py-3 text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none transition-opacity${continueAiLoading ? ' opacity-40 cursor-not-allowed' : ''}`}
+                placeholder="Describe additional features or changes to implement…"
+                value={continueSpec}
+                readOnly={continueAiLoading}
+                onChange={e => setContinueSpec(e.target.value)}
+                autoFocus
+              />
+              {continueAiLoading && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <span className="text-sm font-medium text-indigo-600 dark:text-indigo-400 animate-pulse bg-white/80 dark:bg-gray-900/80 px-4 py-2 rounded-full">
+                    ✨ Generating plan…
+                  </span>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-2 px-4 py-3 border-t border-gray-200 dark:border-gray-700 shrink-0 flex-wrap">
+              <button
+                onClick={handleContinueAiFill}
+                disabled={!continueSpec.trim() || continueAiLoading}
+                className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-indigo-200 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                ✨ Plan with AI
+              </button>
+              <select
+                value={continuePersonality}
+                onChange={e => setContinuePersonality(e.target.value)}
+                className="border border-gray-200 dark:border-gray-600 rounded-md px-2 py-1 text-xs bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+              >
+                {Object.values(personalities).map(p => (
+                  <option key={p.id} value={p.id}>{p.icon} {p.label}</option>
+                ))}
+              </select>
+              <button
+                onClick={() => { handleContinueWithSpecs(); setContinueExpanded(false); }}
+                disabled={!continueSpec.trim() || continueAiLoading}
+                className="ml-auto flex items-center gap-1 px-4 py-1.5 text-xs font-semibold rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                + Continue →
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── User steer bar ── */}

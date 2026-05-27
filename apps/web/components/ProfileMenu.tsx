@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import BackupPanel from './BackupPanel';
 import NotificationPanel from './NotificationPanel';
 import AgentDefaults from './AgentDefaults';
+import SecurityPanel from './SecurityPanel';
 
 export default function ProfileMenu() {
   const { data: session } = useSession();
@@ -14,6 +15,7 @@ export default function ProfileMenu() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [showNotificationPanel, setShowNotificationPanel] = useState(false);
   const [showAgentDefaults, setShowAgentDefaults] = useState(false);
+  const [showSecurity, setShowSecurity] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Sync dark state from DOM on mount
@@ -204,6 +206,20 @@ export default function ProfileMenu() {
             </button>
           </div>
 
+          {/* Security */}
+          <div className="px-3 py-1.5">
+            <button
+              onClick={() => { setOpen(false); setShowSecurity(true); }}
+              className="w-full flex items-center gap-2 px-1 py-1.5 rounded hover:bg-gray-700 transition-colors"
+            >
+              <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+              <span className="text-sm text-gray-300">Security</span>
+              <svg className="w-3 h-3 text-gray-500 ml-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+            </button>
+          </div>
+
           <div className="border-t border-gray-700 mt-0.5" />
           <button
             onClick={() => { setOpen(false); signOut(); }}
@@ -251,6 +267,8 @@ export default function ProfileMenu() {
       {showBackupPanel && <BackupPanel onClose={() => setShowBackupPanel(false)} />}
       {/* Notification configuration modal */}
       {showNotificationPanel && <NotificationPanel onClose={() => setShowNotificationPanel(false)} />}
+      {/* Security modal */}
+      {showSecurity && <SecurityPanel onClose={() => setShowSecurity(false)} />}
       {/* Agent Defaults modal */}
       {showAgentDefaults && (
         <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4">

@@ -69,6 +69,7 @@ function AppShellInner() {
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [showNewRunModal, setShowNewRunModal] = useState(false);
+  const [newRunPrefill, setNewRunPrefill] = useState<{ spec?: string; title?: string } | null>(null);
 
   // ── Initial load ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -371,6 +372,10 @@ function AppShellInner() {
                     run={activeRun}
                     onUpdate={handleRunUpdate}
                     onDelete={handleRunDelete}
+                    onNewPersonalityRun={(spec, title) => {
+                      setNewRunPrefill({ spec, title });
+                      setShowNewRunModal(true);
+                    }}
                   />
                 );
               })()
@@ -381,7 +386,9 @@ function AppShellInner() {
       {showNewRunModal && (
         <NewRunModal
           onStart={handleNewRun}
-          onClose={() => setShowNewRunModal(false)}
+          onClose={() => { setShowNewRunModal(false); setNewRunPrefill(null); }}
+          initialSpec={newRunPrefill?.spec}
+          initialTitle={newRunPrefill?.title}
         />
       )}
       <AssistantBot

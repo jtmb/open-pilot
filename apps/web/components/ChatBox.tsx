@@ -4,6 +4,20 @@ import type { Mode } from './ModelSelector';
 import { personalities, type PersonalityDef, type PersonalityId } from '@/services/agentOrchestrator';
 import { loadAgentDefaults } from './AgentDefaults';
 
+/**
+ * Converts a build-oriented workerSystem prompt into a clean conversational
+ * system prompt, preserving the personality's domain expertise and description.
+ */
+function buildChatSystemPrompt(p: PersonalityDef): string {
+  const identity = p.workerSystem
+    .split(/\n\n/)[0]
+    .replace(/\s*A [^.]+?agent assigns[^.]*\.\s*/g, ' ')
+    .replace(/\s+working autonomously on [^.]+/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return `${identity}\n\nYour expertise: ${p.description}.\n\nYou are having a direct conversation with the user. Be helpful, concise, and natural. Do not output any special protocol tokens or markers.`;
+}
+
 export type ApprovalMode = 'approvals' | 'bypass' | 'autopilot';
 
 const APPROVAL_OPTIONS: { value: ApprovalMode; label: string; icon: string }[] = [
@@ -19,6 +33,7 @@ export interface Message {
   model?: string;
   mode?: string;
   reasoningEffort?: string;
+  personality?: string;
 }
 
 export interface ConversationData {
@@ -63,6 +78,7 @@ export default function ChatBox({ conversation, model, mode, reasoningEffort, on
       id: Date.now() + '-user',
       role: 'user',
       content: input.trim(),
+      personality: personality ? `${personality.icon} ${personality.label}` : undefined,
     };
 
     // Derive title from first user message
@@ -95,7 +111,7 @@ export default function ChatBox({ conversation, model, mode, reasoningEffort, on
           model,
           mode,
           reasoningEffort: reasoningEffort || undefined,
-          systemPrompt: personality?.workerSystem || undefined,
+          systemPrompt: personality ? buildChatSystemPrompt(personality) : undefined,
           history,
         }),
       });
@@ -191,6 +207,11 @@ export default function ChatBox({ conversation, model, mode, reasoningEffort, on
             {msg.role === 'ai' && msg.model && (
               <span className="mt-1 text-xs text-gray-400">
                 {msg.model}{msg.mode && msg.mode !== 'ask' ? ` · ${msg.mode}` : ''}{msg.reasoningEffort ? ` · ${msg.reasoningEffort}` : ''}
+              </span>
+            )}
+            {msg.role === 'user' && msg.personality && (
+              <span className="mt-1 text-xs text-gray-400">
+                {msg.personality}
               </span>
             )}
           </div>

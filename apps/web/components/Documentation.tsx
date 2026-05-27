@@ -3,6 +3,7 @@ import { useState } from 'react';
 
 type Section =
   | 'overview'
+  | 'github-oauth-browser'
   | 'github-oauth'
   | 'api-chat'
   | 'api-tools'
@@ -10,8 +11,9 @@ type Section =
   | 'api-models';
 
 const NAV: Array<{ id: Section; label: string; group?: string }> = [
-  { id: 'overview',     label: '📖 Overview' },
-  { id: 'github-oauth', label: '🔐 GitHub OAuth' },
+  { id: 'overview',             label: 'Overview' },
+  { id: 'github-oauth-browser', label: 'GitHub OAuth (Browser)',  group: '⚙ Setup' },
+  { id: 'github-oauth',         label: 'GitHub OAuth (Docker)',   group: '⚙ Setup' },
   { id: 'api-chat',     label: 'Chat Completions',   group: '🔌 API Reference' },
   { id: 'api-tools',    label: 'Tools & Functions',  group: '🔌 API Reference' },
   { id: 'api-format',   label: 'Response Format',    group: '🔌 API Reference' },
@@ -28,7 +30,7 @@ export default function Documentation() {
     if (item.group && item.group !== lastGroup) {
       lastGroup = item.group;
       rendered.push(
-        <p key={`g-${item.group}`} className="mt-3 mb-1 px-3 text-[10px] font-bold uppercase tracking-widest text-gray-400 dark:text-gray-500 select-none">
+        <p key={`g-${item.group}`} className="mt-4 mb-0.5 px-3 text-sm font-semibold text-gray-700 dark:text-gray-300 select-none">
           {item.group}
         </p>,
       );
@@ -58,8 +60,9 @@ export default function Documentation() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-8">
-        {active === 'overview'     && <OverviewDocs />}
-        {active === 'github-oauth' && <GitHubOAuthDocs />}
+        {active === 'overview'             && <OverviewDocs />}
+        {active === 'github-oauth-browser'   && <GitHubOAuthBrowserDocs />}
+        {active === 'github-oauth'           && <GitHubOAuthDocs />}
         {active === 'api-chat'     && <ApiChatDocs />}
         {active === 'api-tools'    && <ApiToolsDocs />}
         {active === 'api-format'   && <ApiFormatDocs />}
@@ -131,6 +134,69 @@ function NoteBox({ children }: { children: React.ReactNode }) {
     <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 text-xs text-gray-600 dark:text-gray-400 space-y-1">
       <p className="font-semibold text-gray-900 dark:text-white text-sm mb-1">Notes</p>
       <div>{children}</div>
+    </div>
+  );
+}
+
+export function GitHubOAuthBrowserDocs() {
+  return (
+    <div className="max-w-2xl space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold text-gray-900 dark:text-white">GitHub OAuth — Browser Setup</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          Configure GitHub OAuth directly from the sign-in screen — no Docker restart needed.
+        </p>
+      </div>
+
+      <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl p-4 text-sm text-green-800 dark:text-green-300">
+        <strong>Recommended for first-time setup.</strong> Credentials are saved inside the container and take effect immediately.
+      </div>
+
+      <div className="space-y-6">
+        <Step n={1} title="Open the GitHub OAuth app registration page">
+          <p>Visit <strong>github.com/settings/applications/new</strong> (you must be signed into GitHub).</p>
+        </Step>
+
+        <Step n={2} title="Fill in the app details">
+          <p>Use these exact values:</p>
+          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 space-y-2 text-xs font-mono">
+            <div><span className="text-gray-400">Application name:</span> <span className="text-gray-900 dark:text-white">OpenPilot</span></div>
+            <div><span className="text-gray-400">Homepage URL:</span> <span className="text-gray-900 dark:text-white">http://localhost:3000</span></div>
+            <div><span className="text-gray-400">Authorization callback URL:</span> <span className="text-green-600 dark:text-green-400">http://localhost:3000/api/auth/callback/github</span></div>
+          </div>
+          <p className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 rounded p-2">
+            ⚠ If running on a custom domain or port, replace <Code>localhost:3000</Code> with your actual host in both URLs.
+          </p>
+        </Step>
+
+        <Step n={3} title="Copy your Client ID and generate a Client Secret">
+          <p>After clicking <strong>Register application</strong>, GitHub shows you the <strong>Client ID</strong>. Click <em>Generate a new client secret</em> to reveal the secret.</p>
+          <p className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/30 rounded p-2">
+            🔒 Copy the Client Secret immediately — GitHub will not show it again.
+          </p>
+        </Step>
+
+        <Step n={4} title="Enter credentials on the sign-in screen">
+          <p>Open <Code>http://localhost:3000</Code>. You will see a <strong>Connect GitHub</strong> setup screen with two fields:</p>
+          <ul className="list-disc pl-5 space-y-1">
+            <li><strong>GitHub Client ID</strong> — paste the value from step 3</li>
+            <li><strong>GitHub Client Secret</strong> — paste the secret from step 3</li>
+          </ul>
+          <p>Click <strong>Save &amp; Sign in →</strong>. The page immediately transitions to the sign-in view — no container restart required.</p>
+        </Step>
+
+        <Step n={5} title="Sign in with GitHub">
+          <p>Click <strong>Sign in with GitHub</strong>. GitHub will ask you to authorize OpenPilot. After authorizing, you are redirected back and signed in.</p>
+          <p>The app uses your OAuth token to call the Copilot API on your behalf — no extra credentials are stored beyond the session token.</p>
+        </Step>
+
+        <Step n={6} title="(Optional) Set an access password">
+          <p>To prevent unauthorised sign-ins (e.g. after you sign out, a second person using the same browser clicking the GitHub button), set an access password:</p>
+          <Pre>{`# in docker/docker-compose.yml → web → environment:
+- ACCESS_PASSWORD=your_strong_password`}</Pre>
+          <p>When configured, the sign-in screen requires this password before the GitHub OAuth button becomes active. The password is never stored in the browser.</p>
+        </Step>
+      </div>
     </div>
   );
 }

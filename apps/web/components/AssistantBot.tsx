@@ -80,15 +80,37 @@ Be concise. Answer in 1–4 short sentences unless the user asks for more detail
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
+const STORAGE_KEY = 'openpilot:assistant-chat';
+
 export default function AssistantBot({ activeTab, onNavigate, onNewRun, onNewChat }: AssistantBotProps) {
   const [open, setOpen]           = useState(false);
-  const [messages, setMessages]   = useState<BotMessage[]>([]);
+  const [messages, setMessages]   = useState<BotMessage[]>(() => {
+    // Hydrate from localStorage on first render
+    try {
+      const raw = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEY) : null;
+      if (raw) return JSON.parse(raw) as BotMessage[];
+    } catch { /* ignore */ }
+    return [];
+  });
   const [input, setInput]         = useState('');
   const [loading, setLoading]     = useState(false);
   const [model, setModel]         = useState('');
   const historyRef                = useRef<Array<{ role: string; content: string }>>([]);
   const bottomRef                 = useRef<HTMLDivElement>(null);
   const inputRef                  = useRef<HTMLInputElement>(null);
+
+  // Rebuild historyRef from persisted messages on mount
+  useEffect(() => {
+    historyRef.current = messages.map(m => ({ role: m.role, content: m.content }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist messages to localStorage whenever they change
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+    } catch { /* quota exceeded or SSR — ignore */ }
+  }, [messages]);
 
   // Load model from agent defaults, fall back to empty string (server will use best free)
   useEffect(() => {
@@ -193,7 +215,7 @@ export default function AssistantBot({ activeTab, onNavigate, onNewRun, onNewCha
         onClick={() => setOpen(v => !v)}
         title="OpenPilot Assistant"
         aria-label={open ? 'Close assistant' : 'Open assistant'}
-        className={`fixed bottom-4 right-4 z-50 w-10 h-10 rounded-full shadow-lg flex items-center justify-center transition-all duration-200 select-none ${
+        className={`fixed bottom-14 right-4 z-50 w-10 h-10 rounded-full shadow-lg flex items-center justify-center transition-all duration-200 select-none ${
           open
             ? 'bg-gray-800 border border-gray-700 shadow-md hover:bg-gray-700'
             : 'bg-blue-600 hover:bg-blue-700 hover:scale-105'
@@ -214,7 +236,7 @@ export default function AssistantBot({ activeTab, onNavigate, onNewRun, onNewCha
 
       {/* Chat panel */}
       <div
-        className={`fixed bottom-16 right-4 z-40 w-80 sm:w-96 bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden transition-all duration-300 ease-out ${
+        className={`fixed bottom-[6.5rem] right-4 z-40 w-80 sm:w-96 bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden transition-all duration-300 ease-out ${
           open ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 translate-y-4 pointer-events-none'
         }`}
         style={{ maxHeight: 'min(720px, calc(100vh - 5rem))' }}
@@ -232,6 +254,7 @@ export default function AssistantBot({ activeTab, onNavigate, onNewRun, onNewCha
             onClick={() => {
               setMessages([]);
               historyRef.current = [];
+              try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
             }}
             title="Clear conversation"
             className="text-blue-200 hover:text-white transition-colors text-xs"
