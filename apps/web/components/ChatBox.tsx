@@ -1,6 +1,8 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import type { Mode } from './ModelSelector';
+import { personalities, type PersonalityDef, type PersonalityId } from '@/services/agentOrchestrator';
+import { loadAgentDefaults } from './AgentDefaults';
 
 export type ApprovalMode = 'approvals' | 'bypass' | 'autopilot';
 
@@ -38,7 +40,17 @@ export default function ChatBox({ conversation, model, mode, reasoningEffort, on
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>('approvals');
+  const [personality, setPersonality] = useState<PersonalityDef | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Load default personality from agent defaults on mount
+  useEffect(() => {
+    const defaults = loadAgentDefaults();
+    if (defaults.chatPersonality) {
+      const p = personalities[defaults.chatPersonality as PersonalityId];
+      if (p) setPersonality(p);
+    }
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -69,10 +81,23 @@ export default function ChatBox({ conversation, model, mode, reasoningEffort, on
     setLoading(true);
 
     try {
+      // Build conversation history (all prior messages) for multi-turn context
+      const history = conversation.messages.map(m => ({
+        role: m.role === 'user' ? 'user' as const : 'assistant' as const,
+        content: m.content,
+      }));
+
       const res = await fetch('/api/copilot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: userMsg.content, model, mode, reasoningEffort: reasoningEffort || undefined }),
+        body: JSON.stringify({
+          prompt: userMsg.content,
+          model,
+          mode,
+          reasoningEffort: reasoningEffort || undefined,
+          systemPrompt: personality?.workerSystem || undefined,
+          history,
+        }),
       });
       const data = await res.json() as { result?: string; error?: string };
       const aiMsg: Message = {
@@ -101,16 +126,36 @@ export default function ChatBox({ conversation, model, mode, reasoningEffort, on
 
   return (
     <div className="flex flex-col h-full">
-      {/* Badge showing active model / mode + approval mode */}
+      {/* Badge bar — model / mode / personality / approval mode */}
       <div className="flex items-center gap-2 px-4 py-2 border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400 flex-wrap">
-        <span className="bg-gray-200 rounded px-2 py-0.5">{model}</span>
-        <span className="bg-gray-200 rounded px-2 py-0.5 capitalize">{mode}</span>
+        <span className="bg-gray-200 dark:bg-gray-700 rounded px-2 py-0.5">{model}</span>
+        <span className="bg-gray-200 dark:bg-gray-700 rounded px-2 py-0.5 capitalize">{mode}</span>
         {reasoningEffort && (
           <span className="bg-purple-100 text-purple-700 rounded px-2 py-0.5 capitalize">🧠 {reasoningEffort}</span>
         )}
+        {/* Personality picker */}
+        <select
+          className="border rounded px-2 py-0.5 text-xs bg-white dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200 text-gray-700 cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-400"
+          value={personality?.id ?? ''}
+          onChange={e => {
+            const id = e.target.value as PersonalityId | '';
+            setPersonality(id ? personalities[id] : null);
+          }}
+          title="Chat personality"
+        >
+          <option value="">💬 General</option>
+          {Object.values(personalities).map(p => (
+            <option key={p.id} value={p.id}>{p.icon} {p.label}</option>
+          ))}
+        </select>
+        {personality && (
+          <span className="text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 rounded px-2 py-0.5 max-w-[14rem] truncate" title={personality.description}>
+            {personality.icon} {personality.label} mode
+          </span>
+        )}
         <span className="ml-auto">
           <select
-            className="border rounded px-2 py-0.5 text-xs bg-white text-gray-700 cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-400"
+            className="border rounded px-2 py-0.5 text-xs bg-white dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200 text-gray-700 cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-400"
             value={approvalMode}
             onChange={e => setApprovalMode(e.target.value as ApprovalMode)}
             title="Approval mode"
@@ -162,13 +207,13 @@ export default function ChatBox({ conversation, model, mode, reasoningEffort, on
 
       {/* Input */}
       <form
-        className="flex p-4 border-t bg-gray-50 dark:bg-gray-800 dark:border-gray-700 gap-2"
+        className="flex px-4 py-2.5 border-t border-gray-200 dark:border-gray-700 gap-2"
         onSubmit={e => { e.preventDefault(); sendMessage(); }}
       >
         <textarea
-          className="flex-1 border rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400"
+          className="flex-1 border border-gray-200 dark:border-gray-600 rounded-xl px-3 py-1.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:text-gray-100 dark:placeholder-gray-400 bg-gray-50 dark:bg-gray-800/60"
           placeholder="Type your message…"
-          rows={2}
+          rows={1}
           value={input}
           onChange={e => setInput(e.target.value)}
           disabled={loading}
@@ -181,7 +226,7 @@ export default function ChatBox({ conversation, model, mode, reasoningEffort, on
         />
         <button
           type="submit"
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium disabled:opacity-50 transition-colors"
+          className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-xl text-sm font-medium disabled:opacity-50 transition-colors shrink-0"
           disabled={loading || !input.trim()}
         >
           Send

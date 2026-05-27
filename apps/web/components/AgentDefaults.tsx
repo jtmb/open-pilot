@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { bestFreeModel, multiplierLabel, type CopilotModel } from './ModelSelector';
+import { personalities, type PersonalityId } from '@/services/agentOrchestrator';
 
 export const AGENT_DEFAULTS_KEY = 'openpilot:agentDefaults';
 
@@ -13,6 +14,8 @@ export interface AgentDefaultsConfig {
   managerModel: string;
   /** Default monitor model */
   monitorModel: string;
+  /** Default personality for new chat conversations (empty = no personality) */
+  chatPersonality: string;
 }
 
 export function loadAgentDefaults(): AgentDefaultsConfig {
@@ -135,10 +138,28 @@ export default function AgentDefaults() {
               label={label}
               hint={hint}
               models={models}
-              value={config[key] ?? ''}
+              value={(config[key] as string) ?? ''}
               onChange={val => handleChange(key, val)}
             />
           ))}
+        </div>
+
+        {/* Chat personality default */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 p-5 space-y-3">
+          <div>
+            <p className="text-sm font-semibold text-gray-800 dark:text-gray-100">💬 Default Chat Personality</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">Pre-selects a personality when you open a new chat. The personality injects a system prompt that shapes how the AI responds.</p>
+          </div>
+          <select
+            className="w-full border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            value={config.chatPersonality ?? ''}
+            onChange={e => handleChange('chatPersonality', e.target.value)}
+          >
+            <option value="">— No personality (general assistant) —</option>
+            {Object.values(personalities).map(p => (
+              <option key={p.id} value={p.id}>{p.icon} {p.label} — {p.description}</option>
+            ))}
+          </select>
         </div>
 
         {saved && (

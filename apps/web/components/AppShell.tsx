@@ -13,7 +13,6 @@ import AuthUI from './AuthUI';
 import SetupCopilot from './SetupCopilot';
 import AgentWorkspace from './AgentWorkspace';
 import NewRunModal from './NewRunModal';
-import AgentDefaults from './AgentDefaults';
 import AssistantBot from './AssistantBot';
 import type { AgentRun } from '@/services/agentOrchestrator';
 
@@ -54,7 +53,7 @@ function AppShellInner() {
       .catch(() => setCredChecked(true));
   }, []);
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'chat' | 'docs' | 'autopilot' | 'apikeys' | 'settings'>('chat');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'chat' | 'docs' | 'autopilot' | 'apikeys'>('chat');
   const [model, setModel] = useState('');
   const [mode, setMode]   = useState<Mode>('ask');
   const [reasoningEffort, setReasoningEffort] = useState('');
@@ -341,7 +340,6 @@ function AppShellInner() {
             {activeTab === 'dashboard' && <Dashboard agentRuns={agentRuns} conversations={conversations} onSelectRun={(id) => { setActiveRunId(id); setActiveTab('autopilot'); }} onSelectConv={(id) => { setActiveId(id); setActiveTab('chat'); }} />}
             {activeTab === 'docs'      && <Documentation />}
             {activeTab === 'apikeys'   && <ApiKeysManager />}
-            {activeTab === 'settings'  && <AgentDefaults />}
             {activeTab === 'chat'      && hydrated && activeConversation && (
               <ChatBox
                 key={activeConversation.id}

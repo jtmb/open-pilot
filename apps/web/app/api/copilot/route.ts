@@ -12,12 +12,12 @@ const handler = async (req: NextRequest) => {
   }
   busy = true;
   try {
-    const { prompt, model, mode, reasoningEffort } = await req.json();
+    const { prompt, model, mode, reasoningEffort, systemPrompt, history } = await req.json();
     if (!prompt) {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 });
     }
 
-    const copilotResponse = await sendCopilotPrompt(prompt, { model, mode, reasoningEffort });
+    const copilotResponse = await sendCopilotPrompt(prompt, { model, mode, reasoningEffort, systemPrompt, history });
     return NextResponse.json({ result: copilotResponse });
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });

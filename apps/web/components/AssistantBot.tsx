@@ -4,7 +4,7 @@ import { loadAgentDefaults } from './AgentDefaults';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type TabName = 'dashboard' | 'chat' | 'docs' | 'autopilot' | 'apikeys' | 'settings';
+type TabName = 'dashboard' | 'chat' | 'docs' | 'autopilot' | 'apikeys';
 
 interface BotMessage {
   role: 'user' | 'assistant';
@@ -53,7 +53,6 @@ const TAB_NAMES: Record<TabName, string> = {
   docs:      'API Documentation',
   autopilot: 'Auto Pilot (agent runs)',
   apikeys:   'API Keys',
-  settings:  'Agent Defaults (settings)',
 };
 
 function buildSystemPrompt(activeTab: TabName): string {
@@ -65,12 +64,12 @@ The app has these sections:
 - Dashboard (tab: dashboard): Stats on agent runs, conversations, model usage, billing, and training data.
 - API Docs (tab: docs): Documentation for the OpenPilot REST API.
 - API Keys (tab: apikeys): Create and manage API keys for external access.
-- Agent Defaults (tab: settings): Pick the default AI model for the assistant, agent worker, manager, and monitor.
+- Agent Defaults: Accessible via the profile menu (bottom-left) — configure default AI models and chat personality.
 
 The user is currently on: **${TAB_NAMES[activeTab]}**
 
 You can take actions to help the user by including action tokens anywhere in your response:
-- [NAV:dashboard] [NAV:chat] [NAV:autopilot] [NAV:docs] [NAV:apikeys] [NAV:settings] — navigate to a section
+- [NAV:dashboard] [NAV:chat] [NAV:autopilot] [NAV:docs] [NAV:apikeys] — navigate to a section
 - [NEW_RUN] — open the New Agent Run dialog
 - [NEW_CHAT] — start a new chat conversation
 
@@ -119,7 +118,7 @@ export default function AssistantBot({ activeTab, onNavigate, onNewRun, onNewCha
     for (const action of actions) {
       if (action.type === 'nav' && action.payload) {
         const tab = action.payload as TabName;
-        const valid: TabName[] = ['dashboard', 'chat', 'docs', 'autopilot', 'apikeys', 'settings'];
+        const valid: TabName[] = ['dashboard', 'chat', 'docs', 'autopilot', 'apikeys'];
         if (valid.includes(tab)) onNavigate(tab);
       } else if (action.type === 'new_run') {
         onNewRun();
@@ -194,20 +193,20 @@ export default function AssistantBot({ activeTab, onNavigate, onNewRun, onNewCha
         onClick={() => setOpen(v => !v)}
         title="OpenPilot Assistant"
         aria-label={open ? 'Close assistant' : 'Open assistant'}
-        className={`fixed bottom-5 right-5 z-50 w-14 h-14 rounded-full shadow-xl flex items-center justify-center transition-all duration-200 select-none ${
+        className={`fixed bottom-4 right-4 z-50 w-10 h-10 rounded-full shadow-lg flex items-center justify-center transition-all duration-200 select-none ${
           open
-            ? 'bg-white border border-gray-200 shadow-lg hover:bg-gray-50'
+            ? 'bg-gray-800 border border-gray-700 shadow-md hover:bg-gray-700'
             : 'bg-blue-600 hover:bg-blue-700 hover:scale-105'
         }`}
       >
         {open ? (
           /* Close X */
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
           </svg>
         ) : (
           /* Chat bubble */
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-4 4v-4z" />
           </svg>
         )}
@@ -215,7 +214,7 @@ export default function AssistantBot({ activeTab, onNavigate, onNewRun, onNewCha
 
       {/* Chat panel */}
       <div
-        className={`fixed bottom-20 right-5 z-40 w-80 sm:w-96 bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden transition-all duration-300 ease-out ${
+        className={`fixed bottom-16 right-4 z-40 w-80 sm:w-96 bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden transition-all duration-300 ease-out ${
           open ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 translate-y-4 pointer-events-none'
         }`}
         style={{ maxHeight: 'min(720px, calc(100vh - 5rem))' }}
@@ -323,12 +322,11 @@ export default function AssistantBot({ activeTab, onNavigate, onNewRun, onNewCha
 // ── Quick suggestions per tab ──────────────────────────────────────────────────
 
 const QUICK_SUGGESTIONS: Partial<Record<TabName, string[]>> = {
-  dashboard: ['What do my stats mean?', 'How do I lower costs?', 'Take me to settings'],
+  dashboard: ['What do my stats mean?', 'How do I lower costs?', 'Open agent defaults'],
   chat:      ['Start a new conversation', 'What models are available?', 'How do I use agents?'],
   autopilot: ['Start a new agent run', 'What agent types are there?', 'How do I use Auto Pilot?'],
   docs:      ['How do I use the API?', 'Show me chat examples', 'How do I get an API key?'],
   apikeys:   ['Take me to API keys', 'How do API keys work?', 'What can I use the API for?'],
-  settings:  ['What is a 0× model?', 'Which model should I pick?', 'What does the worker model do?'],
 };
 
 // ── Minimal inline markdown renderer ──────────────────────────────────────────

@@ -282,7 +282,7 @@ export default function NewRunModal({ onStart, onClose }: Props) {
             <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">
               Agent Type
             </label>
-            <div className="relative flex items-stretch gap-1" style={{ height: '4.5rem' }}>
+            <div className="relative flex items-stretch gap-1" style={{ height: '3.25rem' }}>
               <button
                 type="button"
                 onClick={() => navigate(-1)}
@@ -309,7 +309,7 @@ export default function NewRunModal({ onStart, onClose }: Props) {
                           transition: 'width 220ms cubic-bezier(0.4,0,0.2,1)',
                         }}
                         onClick={() => { if (i === 1) navigate(-1); else if (i === 3) navigate(1); }}
-                        className={`flex flex-col items-center justify-center gap-1 p-2 rounded-lg border-2 text-center h-full ${
+                        className={`flex flex-col items-center justify-center gap-0.5 p-1.5 rounded-lg border-2 text-center h-full ${
                           isEdge ? 'border-transparent opacity-0 pointer-events-none'
                           : isCenter ? 'border-blue-500 bg-blue-50 shadow-sm'
                           : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50 opacity-60 cursor-pointer'
@@ -317,14 +317,14 @@ export default function NewRunModal({ onStart, onClose }: Props) {
                       >
                         <span style={{
                           display: 'inline-block',
-                          fontSize: isBig ? '1.75rem' : '1.125rem',
+                          fontSize: isBig ? '1.25rem' : '0.875rem',
                           lineHeight: 1,
                           flexShrink: 0,
                           transition: 'font-size 220ms ease',
                         }}>{p.icon}</span>
                         <span
                           className="font-semibold text-gray-800 leading-tight"
-                          style={{ fontSize: isBig ? '0.8125rem' : '0.6875rem', flexShrink: 0, transition: 'font-size 220ms ease' }}
+                          style={{ fontSize: isBig ? '0.6875rem' : '0.5625rem', flexShrink: 0, transition: 'font-size 220ms ease' }}
                         >{p.label}</span>
                       </button>
                     );

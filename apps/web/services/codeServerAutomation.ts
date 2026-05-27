@@ -17,18 +17,27 @@ export interface CopilotOptions {
   model?: string;
   mode?:  'ask' | 'plan' | 'agent';
   reasoningEffort?: string;
+  /** Extra system prompt prepended after the mode-based system prompt (e.g. personality) */
+  systemPrompt?: string;
+  /** Previous conversation messages for multi-turn context */
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
 }
 
 export async function sendToCodeServerChatBox(
   message: string,
-  { model = 'gpt-4o', mode = 'ask', reasoningEffort }: CopilotOptions = {},
+  { model = 'gpt-4o', mode = 'ask', reasoningEffort, systemPrompt, history }: CopilotOptions = {},
 ): Promise<string> {
   log(`sending [model=${model} mode=${mode} effort=${reasoningEffort ?? 'default'}]:`, message.slice(0, 80));
   const token = await getCopilotToken();
 
-  const systemText = MODE_SYSTEM[mode] ?? '';
+  const baseSystem = MODE_SYSTEM[mode] ?? '';
+  const fullSystem = [baseSystem, systemPrompt].filter(Boolean).join('\n\n');
   const messages: Array<{ role: string; content: string }> = [];
-  if (systemText) messages.push({ role: 'system', content: systemText });
+  if (fullSystem) messages.push({ role: 'system', content: fullSystem });
+  // Include prior conversation turns for context
+  for (const h of (history ?? [])) {
+    messages.push({ role: h.role, content: h.content });
+  }
   messages.push({ role: 'user', content: message });
 
   const body: Record<string, unknown> = {
