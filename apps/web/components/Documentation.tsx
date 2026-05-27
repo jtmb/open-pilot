@@ -1,53 +1,69 @@
 'use client';
 import { useState } from 'react';
 
-type Section = 'overview' | 'github-oauth' | 'api';
+type Section =
+  | 'overview'
+  | 'github-oauth'
+  | 'api-chat'
+  | 'api-tools'
+  | 'api-format'
+  | 'api-models';
+
+const NAV: Array<{ id: Section; label: string; group?: string }> = [
+  { id: 'overview',     label: '📖 Overview' },
+  { id: 'github-oauth', label: '🔐 GitHub OAuth' },
+  { id: 'api-chat',     label: 'Chat Completions',   group: '🔌 API Reference' },
+  { id: 'api-tools',    label: 'Tools & Functions',  group: '🔌 API Reference' },
+  { id: 'api-format',   label: 'Response Format',    group: '🔌 API Reference' },
+  { id: 'api-models',   label: 'List Models',        group: '🔌 API Reference' },
+];
 
 export default function Documentation() {
   const [active, setActive] = useState<Section>('overview');
 
+  // Build nav with group headers
+  const rendered: JSX.Element[] = [];
+  let lastGroup: string | undefined;
+  for (const item of NAV) {
+    if (item.group && item.group !== lastGroup) {
+      lastGroup = item.group;
+      rendered.push(
+        <p key={`g-${item.group}`} className="mt-3 mb-1 px-3 text-[10px] font-bold uppercase tracking-widest text-gray-400 dark:text-gray-500 select-none">
+          {item.group}
+        </p>,
+      );
+    }
+    const indented = !!item.group;
+    rendered.push(
+      <button
+        key={item.id}
+        onClick={() => setActive(item.id)}
+        className={`w-full text-left text-sm px-3 py-1.5 rounded transition-colors ${indented ? 'pl-5 text-xs' : ''} ${
+          active === item.id
+            ? 'bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 font-medium'
+            : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+        }`}
+      >
+        {indented ? `└ ${item.label}` : item.label}
+      </button>,
+    );
+  }
+
   return (
     <div className="flex h-full overflow-hidden bg-gray-50 dark:bg-gray-900">
-      {/* Left nav */}
-      <nav className="w-48 shrink-0 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 space-y-1">
-        {([
-          ['overview',     '📖 Overview'],
-          ['github-oauth', '🔐 GitHub OAuth'],
-          ['api',          '🔌 API Usage'],
-        ] as [Section, string][]).map(([id, label]) => (
-          <button
-            key={id}
-            onClick={() => setActive(id)}
-            className={`w-full text-left text-sm px-3 py-2 rounded transition-colors ${
-              active === id
-                ? 'bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 font-medium'
-                : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+      {/* Left nav — page tree */}
+      <nav className="w-52 shrink-0 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3 overflow-y-auto">
+        {rendered}
       </nav>
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-8">
-        {active === 'overview' && (
-          <div className="max-w-2xl space-y-4">
-            <h2 className="text-2xl font-bold text-gray-900 dark:text-white">How to Use OpenPilot</h2>
-            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5 space-y-3 text-sm text-gray-700 dark:text-gray-300">
-              <ul className="list-disc pl-5 space-y-2">
-                <li>Use <strong>Chat</strong> to ask questions or get help from GitHub Copilot directly.</li>
-                <li>Use <strong>Auto Pilot</strong> to run fully autonomous multi-step agent tasks with a Worker + Manager loop.</li>
-                <li>The <strong>Dashboard</strong> shows live stats for your runs, conversations, and API keys.</li>
-                <li>Manage SQLite backups and dark mode from the profile menu at the bottom-left.</li>
-                <li>Use the <strong>API Keys</strong> tab to generate keys for external app integrations.</li>
-              </ul>
-            </div>
-          </div>
-        )}
-
+        {active === 'overview'     && <OverviewDocs />}
         {active === 'github-oauth' && <GitHubOAuthDocs />}
-        {active === 'api' && <ApiUsageDocs />}
+        {active === 'api-chat'     && <ApiChatDocs />}
+        {active === 'api-tools'    && <ApiToolsDocs />}
+        {active === 'api-format'   && <ApiFormatDocs />}
+        {active === 'api-models'   && <ApiModelsDocs />}
       </div>
     </div>
   );

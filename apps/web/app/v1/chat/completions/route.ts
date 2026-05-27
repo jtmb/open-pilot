@@ -88,8 +88,30 @@ export async function POST(req: NextRequest) {
   // Parse body
   let messages: ChatMessage[];
   let wantStream: boolean;
+  let tools:          unknown[] | undefined;
+  let toolChoice:     unknown   | undefined;
+  let responseFormat: unknown   | undefined;
+  let temperature:    number    | undefined;
+  let topP:           number    | undefined;
+  let maxTokens:      number    | undefined;
+  let stop:           unknown   | undefined;
+  let seed:           number    | undefined;
+  let n:              number    | undefined;
+
   try {
-    const body = await req.json() as { messages?: unknown[]; stream?: boolean };
+    const body = await req.json() as {
+      messages?: unknown[];
+      stream?: boolean;
+      tools?: unknown[];
+      tool_choice?: unknown;
+      response_format?: unknown;
+      temperature?: number;
+      top_p?: number;
+      max_tokens?: number;
+      stop?: unknown;
+      seed?: number;
+      n?: number;
+    };
     if (!Array.isArray(body.messages) || body.messages.length === 0) {
       return NextResponse.json(
         { error: { message: 'messages array is required', type: 'invalid_request_error' } },
@@ -104,6 +126,19 @@ export async function POST(req: NextRequest) {
         content: sanitizeContent(msg.content),
       };
     });
+
+    if (Array.isArray(body.tools) && body.tools.length > 0) {
+      // Limit to 64 tools; each forwarded as-is to Copilot
+      tools = body.tools.slice(0, 64);
+    }
+    if (body.tool_choice !== undefined)     toolChoice     = body.tool_choice;
+    if (body.response_format !== undefined) responseFormat = body.response_format;
+    if (typeof body.temperature === 'number') temperature = Math.max(0, Math.min(2, body.temperature));
+    if (typeof body.top_p === 'number')       topP        = Math.max(0, Math.min(1, body.top_p));
+    if (typeof body.max_tokens === 'number')  maxTokens   = Math.min(Math.max(1, body.max_tokens), 32768);
+    if (body.stop !== undefined)  stop = body.stop;
+    if (typeof body.seed === 'number') seed = body.seed;
+    if (typeof body.n === 'number')    n    = Math.min(Math.max(1, body.n), 4);
   } catch {
     return NextResponse.json(
       { error: { message: 'Invalid JSON body', type: 'invalid_request_error' } },
@@ -122,7 +157,20 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const copilotBody = { model: apiKey.model, messages, temperature: 0, top_p: 1, stream: wantStream };
+  const copilotBody: Record<string, unknown> = {
+    model:    apiKey.model,
+    messages,
+    stream:   wantStream,
+    ...(tools          !== undefined && { tools }),
+    ...(toolChoice     !== undefined && { tool_choice: toolChoice }),
+    ...(responseFormat !== undefined && { response_format: responseFormat }),
+    ...(temperature    !== undefined && { temperature }),
+    ...(topP           !== undefined && { top_p: topP }),
+    ...(maxTokens      !== undefined && { max_tokens: maxTokens }),
+    ...(stop           !== undefined && { stop }),
+    ...(seed           !== undefined && { seed }),
+    ...(n              !== undefined && { n }),
+  };
 
   // Update lastUsedAt + increment usageCount fire-and-forget
   prisma.apiKey.update({ where: { id: apiKey.id }, data: { lastUsedAt: BigInt(Date.now()), usageCount: { increment: 1 } } }).catch(() => {});
@@ -165,7 +213,6 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Non-streaming ─────────────────────────────────────────────────────────
-  let reply: string;
   try {
     const res = await fetch(CHAT_URL, {
       method:  'POST',
@@ -182,22 +229,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const data = await res.json() as { choices: Array<{ message: { content: string } }> };
-    reply = data.choices?.[0]?.message?.content ?? '';
+    // Proxy the full Copilot response, overriding model to match the key's setting
+    const data = await res.json() as Record<string, unknown>;
+    return NextResponse.json({ ...data, model: apiKey.model });
   } catch (err) {
     return NextResponse.json(
       { error: { message: (err as Error).message, type: 'server_error' } },
       { status: 500 },
     );
   }
-
-  const created = Math.floor(Date.now() / 1000);
-  return NextResponse.json({
-    id:      `chatcmpl-${Date.now().toString(36)}`,
-    object:  'chat.completion',
-    created,
-    model:   apiKey.model,
-    choices: [{ index: 0, message: { role: 'assistant', content: reply }, finish_reason: 'stop' }],
-    usage:   { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-  });
 }
