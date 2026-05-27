@@ -99,6 +99,42 @@ function Step({ n, title, children }: { n: number; title: string; children: Reac
   );
 }
 
+function ParamTable({ rows }: { rows: [string, string, string, string][] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs border-collapse">
+        <thead>
+          <tr className="border-b border-gray-200 dark:border-gray-700 text-gray-400">
+            <th className="text-left pb-2 pr-3 font-semibold">Parameter</th>
+            <th className="text-left pb-2 pr-3 font-semibold">Type</th>
+            <th className="text-left pb-2 pr-3 font-semibold">Default</th>
+            <th className="text-left pb-2 font-semibold">Description</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+          {rows.map(([name, type, def, desc]) => (
+            <tr key={name} className="align-top">
+              <td className="py-1.5 pr-3 font-mono text-blue-700 dark:text-blue-300 whitespace-nowrap">{name}</td>
+              <td className="py-1.5 pr-3 text-gray-500 whitespace-nowrap">{type}</td>
+              <td className="py-1.5 pr-3 text-gray-400 font-mono whitespace-nowrap">{def}</td>
+              <td className="py-1.5 text-gray-600 dark:text-gray-400">{desc}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function NoteBox({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 text-xs text-gray-600 dark:text-gray-400 space-y-1">
+      <p className="font-semibold text-gray-900 dark:text-white text-sm mb-1">Notes</p>
+      <div>{children}</div>
+    </div>
+  );
+}
+
 function GitHubOAuthDocs() {
   return (
     <div className="max-w-2xl space-y-6">
@@ -166,42 +202,52 @@ docker compose up -d`}</Pre>
   );
 }
 
-function ApiUsageDocs() {
+function OverviewDocs() {
+  return (
+    <div className="max-w-2xl space-y-4">
+      <h2 className="text-2xl font-bold text-gray-900 dark:text-white">How to Use OpenPilot</h2>
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5 space-y-3 text-sm text-gray-700 dark:text-gray-300">
+        <ul className="list-disc pl-5 space-y-2">
+          <li>Use <strong>Chat</strong> to ask questions or get help from GitHub Copilot directly.</li>
+          <li>Use <strong>Auto Pilot</strong> to run fully autonomous multi-step agent tasks with a Worker + Manager loop.</li>
+          <li>The <strong>Dashboard</strong> shows live stats for your runs, conversations, and API keys.</li>
+          <li>Manage SQLite backups and dark mode from the profile menu at the bottom-left.</li>
+          <li>Use the <strong>API Keys</strong> tab to generate keys for external app integrations.</li>
+        </ul>
+      </div>
+      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-4 text-sm text-blue-800 dark:text-blue-300">
+        <p className="font-semibold mb-1">API Reference</p>
+        <p>OpenPilot exposes an OpenAI-compatible REST API at <Code>http://localhost:3000/v1</Code>. See the API Reference sections in the left sidebar.</p>
+      </div>
+    </div>
+  );
+}
+
+function ApiChatDocs() {
   return (
     <div className="max-w-2xl space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Using the OpenPilot API</h2>
+        <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Chat Completions</h2>
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-          The API is OpenAI-compatible. Any client that works with the OpenAI SDK can talk to OpenPilot.
-          Supports streaming, text, and image (vision) inputs.
+          OpenAI-compatible chat endpoint. Supports streaming, vision, tool calling, and JSON mode.
         </p>
       </div>
 
-      {/* Get Started card */}
+      <div className="bg-gray-900 rounded-xl p-3 text-xs font-mono text-gray-400 flex gap-3">
+        <span className="text-green-400 font-bold">POST</span>
+        <span className="text-white">/v1/chat/completions</span>
+      </div>
+
       <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-5 space-y-3">
         <h3 className="text-base font-bold text-blue-900 dark:text-blue-200">🚀 Get Started in 3 steps</h3>
         <ol className="space-y-2 text-sm text-blue-800 dark:text-blue-300">
-          <li className="flex gap-2"><span className="font-bold shrink-0">1.</span><span>Open the <strong>🔑 API Keys</strong> tab in the sidebar → click <em>New App Key</em> → copy the key shown once.</span></li>
+          <li className="flex gap-2"><span className="font-bold shrink-0">1.</span><span>Open the <strong>🔑 API Keys</strong> tab → click <em>New App Key</em> → copy the key shown once.</span></li>
           <li className="flex gap-2"><span className="font-bold shrink-0">2.</span><span>Set <Code>base_url</Code> to <Code>http://localhost:3000/v1</Code> in your OpenAI client.</span></li>
-          <li className="flex gap-2"><span className="font-bold shrink-0">3.</span><span>Use your <Code>opk_...</Code> key as the API key — the model is determined by the key's configured model, not the request.</span></li>
+          <li className="flex gap-2"><span className="font-bold shrink-0">3.</span><span>Use your <Code>opk_...</Code> key as the API key.</span></li>
         </ol>
-        <p className="text-xs text-blue-600 dark:text-blue-400">
-          The Quick Usage snippet in the API Keys tab auto-fills your key after creation.
-        </p>
       </div>
 
-      <Step n={1} title="Create an API key">
-        <p>Go to <strong>API Keys</strong> in the sidebar, click <em>New App Key</em>, choose a name and model, and copy the key shown once.</p>
-      </Step>
-
-      <Step n={2} title="Set the base URL">
-        <p>Point your OpenAI client at your OpenPilot instance:</p>
-        <Pre>{`base_url = "http://localhost:3000/v1"
-api_key  = "opk_your_key_here"`}</Pre>
-      </Step>
-
-      <Step n={3} title="Send a chat completion request">
-        <p>Using <Code>curl</Code>:</p>
+      <Step n={1} title="Basic request (curl)">
         <Pre>{`curl http://localhost:3000/v1/chat/completions \\
   -H "Authorization: Bearer opk_your_key_here" \\
   -H "Content-Type: application/json" \\
@@ -211,7 +257,9 @@ api_key  = "opk_your_key_here"`}</Pre>
       {"role": "user", "content": "Hello!"}
     ]
   }'`}</Pre>
-        <p>Using the Python OpenAI SDK:</p>
+      </Step>
+
+      <Step n={2} title="Python OpenAI SDK">
         <Pre>{`from openai import OpenAI
 
 client = OpenAI(
@@ -226,21 +274,13 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)`}</Pre>
       </Step>
 
-      <Step n={4} title="Streaming responses">
-        <p>Add <Code>"stream": true</Code> to receive tokens as they are generated (Server-Sent Events, same format as the OpenAI API).</p>
-        <p>With <Code>curl</Code>:</p>
+      <Step n={3} title="Streaming responses">
+        <p>Add <Code>"stream": true</Code> to receive tokens as Server-Sent Events.</p>
         <Pre>{`curl http://localhost:3000/v1/chat/completions \\
   -H "Authorization: Bearer opk_your_key_here" \\
   -H "Content-Type: application/json" \\
   --no-buffer \\
-  -d '{
-    "model": "gpt-4o",
-    "stream": true,
-    "messages": [
-      {"role": "user", "content": "Tell me a story."}
-    ]
-  }'`}</Pre>
-        <p>With the Python SDK:</p>
+  -d '{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"Tell me a story."}]}'`}</Pre>
         <Pre>{`stream = client.chat.completions.create(
     model="gpt-4o",
     stream=True,
@@ -251,13 +291,9 @@ for chunk in stream:
     print(delta, end="", flush=True)`}</Pre>
       </Step>
 
-      <Step n={5} title="Sending images (vision)">
-        <p>Pass a content array with <Code>image_url</Code> parts to send images alongside text. Both public HTTPS URLs and base64 data URIs are supported.</p>
-        <p>With the Python SDK:</p>
-        <Pre>{`import base64
-
-# Option A — public URL
-response = client.chat.completions.create(
+      <Step n={4} title="Vision (images)">
+        <p>Pass a content array with <Code>image_url</Code> parts. Accepts HTTPS URLs and base64 data URIs.</p>
+        <Pre>{`response = client.chat.completions.create(
     model="gpt-4o",
     messages=[{
         "role": "user",
@@ -266,38 +302,271 @@ response = client.chat.completions.create(
             {"type": "image_url", "image_url": {"url": "https://example.com/photo.jpg"}},
         ],
     }],
-)
-print(response.choices[0].message.content)
-
-# Option B — base64 data URI
-with open("photo.jpg", "rb") as f:
-    b64 = base64.b64encode(f.read()).decode()
-
-response = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{
-        "role": "user",
-        "content": [
-            {"type": "text", "text": "Describe this image."},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-        ],
-    }],
 )`}</Pre>
-        <p className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 rounded p-2">
-          ⚠ Vision support depends on the model configured for your API key. Use a vision-capable model such as <Code>gpt-4o</Code> or <Code>claude-3-5-sonnet</Code>.
-        </p>
       </Step>
 
-      <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 text-sm text-gray-700 dark:text-gray-300 space-y-1">
-        <p className="font-semibold text-gray-900 dark:text-white">Notes</p>
-        <ul className="list-disc pl-5 space-y-1 text-xs">
-          <li>The <Code>model</Code> field in the request is ignored — the model is set per API key in the UI.</li>
-          <li>Streaming is supported via <Code>"stream": true</Code> — tokens are returned as SSE chunks.</li>
-          <li>Image inputs accept HTTPS URLs or <Code>data:image/…</Code> base64 data URIs.</li>
-          <li>Rate limits are determined by your GitHub Copilot subscription.</li>
-        </ul>
-      </div>
+      <ParamTable rows={[
+        ['messages',        'array',   'required', 'Array of message objects with role and content.'],
+        ['stream',          'boolean', 'false',     'Enable SSE streaming.'],
+        ['temperature',     'number',  '—',         'Sampling temperature 0–2.'],
+        ['top_p',           'number',  '—',         'Nucleus sampling 0–1.'],
+        ['max_tokens',      'integer', '—',         'Max tokens to generate (capped at 32768).'],
+        ['stop',            'string|array', '—',    'Stop sequences.'],
+        ['seed',            'integer', '—',         'Reproducibility seed.'],
+        ['n',               'integer', '1',         'How many completions (max 4).'],
+        ['tools',           'array',   '—',         'Function definitions. See Tools & Functions.'],
+        ['tool_choice',     'string|object', '—',   'Tool selection strategy.'],
+        ['response_format', 'object',  '—',         'Output format. See Response Format.'],
+      ]} />
+
+      <NoteBox>
+        The <Code>model</Code> field in the request is ignored — the model is set per API key in the UI.
+        Rate limits are determined by your GitHub Copilot subscription.
+      </NoteBox>
     </div>
   );
 }
 
+function ApiToolsDocs() {
+  return (
+    <div className="max-w-2xl space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Tools &amp; Function Calling</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          Provide a list of functions the model can call. The model returns a <Code>tool_calls</Code> array when it wants to invoke a tool.
+        </p>
+      </div>
+
+      <div className="bg-gray-900 rounded-xl p-3 text-xs font-mono text-gray-400 flex gap-3">
+        <span className="text-green-400 font-bold">POST</span>
+        <span className="text-white">/v1/chat/completions</span>
+        <span className="ml-auto text-gray-500">with <span className="text-yellow-300">tools</span> field</span>
+      </div>
+
+      <Step n={1} title="Define tools and send the request">
+        <Pre>{`import json
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:3000/v1", api_key="opk_your_key_here")
+
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get the current weather in a city.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "location": {"type": "string", "description": "City name, e.g. 'Paris'"},
+                "unit":     {"type": "string", "enum": ["celsius", "fahrenheit"]},
+            },
+            "required": ["location"],
+        },
+    },
+}]
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
+    tools=tools,
+    tool_choice="auto",
+)
+
+msg = response.choices[0].message
+print(msg.tool_calls)  # model wants to call get_weather`}</Pre>
+      </Step>
+
+      <Step n={2} title="Execute the tool and continue the conversation">
+        <Pre>{`# Extract the call
+tool_call = msg.tool_calls[0]
+args = json.loads(tool_call.function.arguments)
+result = {"temperature": "18°C", "condition": "Cloudy"}  # your real logic here
+
+# Continue with the tool result
+messages = [
+    {"role": "user",      "content": "What's the weather in Tokyo?"},
+    msg,                                                # assistant turn with tool_calls
+    {
+        "role":         "tool",
+        "tool_call_id": tool_call.id,
+        "content":      json.dumps(result),
+    },
+]
+
+final = client.chat.completions.create(
+    model="gpt-4o",
+    messages=messages,
+)
+print(final.choices[0].message.content)
+# "The current weather in Tokyo is 18°C and cloudy."`}</Pre>
+      </Step>
+
+      <Step n={3} title="Controlling which tool the model uses">
+        <Pre>{`# Let the model decide (default)
+tool_choice = "auto"
+
+# Force a specific tool
+tool_choice = {"type": "function", "function": {"name": "get_weather"}}
+
+# Prevent any tool calls
+tool_choice = "none"
+
+# Require some tool call (any)
+tool_choice = "required"`}</Pre>
+      </Step>
+
+      <ParamTable rows={[
+        ['tools',       'array',  'required', 'List of tool definitions. Max 64. Each has type "function" and a function object with name, description, parameters.'],
+        ['tool_choice', 'string|object', '"auto"', '"auto" | "none" | "required" | {"type":"function","function":{"name":"…"}}'],
+      ]} />
+
+      <NoteBox>
+        Tool support depends on the model configured for your API key. Most GPT-4o and Claude Sonnet variants support tool calling.
+      </NoteBox>
+    </div>
+  );
+}
+
+function ApiFormatDocs() {
+  return (
+    <div className="max-w-2xl space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Response Format (JSON Mode)</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          Force the model to always return valid JSON by setting <Code>response_format</Code>.
+        </p>
+      </div>
+
+      <div className="bg-gray-900 rounded-xl p-3 text-xs font-mono text-gray-400 flex gap-3">
+        <span className="text-green-400 font-bold">POST</span>
+        <span className="text-white">/v1/chat/completions</span>
+        <span className="ml-auto text-gray-500">with <span className="text-yellow-300">response_format</span> field</span>
+      </div>
+
+      <Step n={1} title="JSON object mode">
+        <p>Guarantees a parseable JSON object in the response. Always instruct the model to produce JSON in the system or user message.</p>
+        <Pre>{`response = client.chat.completions.create(
+    model="gpt-4o",
+    response_format={"type": "json_object"},
+    messages=[{
+        "role": "user",
+        "content": "Return a JSON object with fields: name (string) and age (integer) for a fictional person.",
+    }],
+)
+
+import json
+data = json.loads(response.choices[0].message.content)
+print(data)  # {"name": "Alice", "age": 30}`}</Pre>
+      </Step>
+
+      <Step n={2} title="JSON schema mode (structured outputs)">
+        <p>Constrain the output to a specific schema using <Code>json_schema</Code>.</p>
+        <Pre>{`schema = {
+    "type": "object",
+    "properties": {
+        "name":  {"type": "string"},
+        "score": {"type": "number"},
+        "tags":  {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["name", "score"],
+    "additionalProperties": False,
+}
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    response_format={
+        "type": "json_schema",
+        "json_schema": {
+            "name":   "result",
+            "strict": True,
+            "schema": schema,
+        },
+    },
+    messages=[{"role": "user", "content": "Rate the movie 'Dune' and list 3 tags."}],
+)
+data = json.loads(response.choices[0].message.content)
+print(data)  # {"name": "Dune", "score": 9.1, "tags": ["sci-fi", "epic", "visuals"]}`}</Pre>
+      </Step>
+
+      <Step n={3} title="With curl">
+        <Pre>{`curl http://localhost:3000/v1/chat/completions \\
+  -H "Authorization: Bearer opk_your_key_here" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "gpt-4o",
+    "response_format": {"type": "json_object"},
+    "messages": [
+      {"role": "user", "content": "Give me a JSON object with a random city and its population."}
+    ]
+  }'`}</Pre>
+      </Step>
+
+      <ParamTable rows={[
+        ['response_format', 'object', '—', 'Set type to "text" (default), "json_object", or "json_schema".'],
+        ['json_schema',     'object', '—', 'Required when type is "json_schema". Contains name, strict, and schema fields.'],
+      ]} />
+
+      <NoteBox>
+        JSON mode support depends on the model. GPT-4o, GPT-4.1, and Claude Sonnet support both <Code>json_object</Code> and <Code>json_schema</Code>. Always tell the model to output JSON in the prompt — the format constraint does not add instructions automatically.
+      </NoteBox>
+    </div>
+  );
+}
+
+function ApiModelsDocs() {
+  return (
+    <div className="max-w-2xl space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold text-gray-900 dark:text-white">List Models</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          Returns the available models in OpenAI-compatible format. Useful for populating model selectors in third-party tools.
+        </p>
+      </div>
+
+      <div className="bg-gray-900 rounded-xl p-3 text-xs font-mono text-gray-400 flex gap-3">
+        <span className="text-blue-400 font-bold">GET</span>
+        <span className="text-white">/v1/models</span>
+      </div>
+
+      <Step n={1} title="Request">
+        <Pre>{`curl http://localhost:3000/v1/models \\
+  -H "Authorization: Bearer opk_your_key_here"`}</Pre>
+      </Step>
+
+      <Step n={2} title="Response">
+        <Pre>{`{
+  "object": "list",
+  "data": [
+    {
+      "id":       "gpt-4o",
+      "object":   "model",
+      "created":  0,
+      "owned_by": "github-copilot"
+    },
+    {
+      "id":       "claude-sonnet-4.6",
+      "object":   "model",
+      "created":  0,
+      "owned_by": "github-copilot"
+    }
+    // ... more models
+  ]
+}`}</Pre>
+      </Step>
+
+      <Step n={3} title="Python SDK">
+        <Pre>{`models = client.models.list()
+for m in models.data:
+    print(m.id)`}</Pre>
+      </Step>
+
+      <NoteBox>
+        The <Code>owned_by</Code> field is always <Code>github-copilot</Code>. The <Code>created</Code> field is 0 as GitHub Copilot does not expose model creation timestamps. Only chat-capable models are listed.
+      </NoteBox>
+    </div>
+  );
+}
+
+function ApiUsageDocs() {
+  return <ApiChatDocs />;
+}

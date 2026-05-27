@@ -21,18 +21,18 @@ interface Props {
 // ─── Styling maps ─────────────────────────────────────────────────────────────
 
 const TYPE_STYLES: Record<LogEntryType, { wrapper: string; badge: string; label: string; tooltip: string }> = {
-  task:         { wrapper: 'bg-white border border-l-4 border-l-blue-400',    badge: 'bg-blue-50 text-blue-700',    label: 'Task',         tooltip: 'Manager assigned a new task to the worker agent'                                         },
-  output:       { wrapper: 'bg-white border border-gray-200',                  badge: 'bg-gray-100 text-gray-600',   label: 'Output',       tooltip: "Worker's code or text output in response to its last task"                            },
-  question:     { wrapper: 'bg-white border border-l-4 border-l-amber-400',   badge: 'bg-amber-50 text-amber-700',  label: 'Question',     tooltip: 'Worker is asking the manager for clarification before proceeding'                     },
-  answer:       { wrapper: 'bg-white border border-l-4 border-l-teal-400',    badge: 'bg-teal-50 text-teal-700',    label: 'Answer',       tooltip: "Manager answered the worker's question"                                               },
-  review:       { wrapper: 'bg-white border border-l-4 border-l-purple-400',  badge: 'bg-purple-50 text-purple-700',label: 'Review',       tooltip: "Manager's full review of the worker's completed work"                                  },
-  correction:   { wrapper: 'bg-white border border-l-4 border-l-orange-400',  badge: 'bg-orange-50 text-orange-700',label: 'Correction',   tooltip: 'Manager is requesting changes or corrections to the work'                            },
-  directive:    { wrapper: 'bg-white border border-l-4 border-l-indigo-400',  badge: 'bg-indigo-50 text-indigo-700',label: 'Directive',    tooltip: 'Manager is giving the worker explicit instructions or guidance'                      },
-  status:       { wrapper: '',                                                  badge: 'bg-gray-100 text-gray-400',   label: 'System',       tooltip: 'Automated system event or status update (not from an agent)'                        },
-  'user-input': { wrapper: 'bg-white border border-l-4 border-l-green-400',   badge: 'bg-green-50 text-green-700',  label: 'You',          tooltip: 'Your direct message injected into the conversation'                                  },
-  'exec':       { wrapper: 'bg-gray-900 border-gray-700',                      badge: 'bg-gray-700 text-green-400',  label: 'Run',          tooltip: 'Shell command requested by the worker to run in the workspace container'              },
-  'exec-result':{ wrapper: 'bg-gray-900 border-gray-700',                      badge: 'bg-gray-700 text-gray-300',   label: 'Output',       tooltip: 'stdout/stderr output and exit code from the executed shell command'                   },
-  'checkpoint': { wrapper: '',                                                  badge: 'bg-indigo-50 text-indigo-600', label: '📍 Checkpoint', tooltip: 'Workspace snapshot automatically saved after this command succeeded — restorable from the Checkpoints panel' },
+  task:         { wrapper: 'bg-white dark:bg-gray-700 border dark:border-gray-600 border-l-4 border-l-blue-400',    badge: 'bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300',    label: 'Task',         tooltip: 'Manager assigned a new task to the worker agent'                                         },
+  output:       { wrapper: 'bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600',                  badge: 'bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-300',      label: 'Output',       tooltip: "Worker's code or text output in response to its last task"                            },
+  question:     { wrapper: 'bg-white dark:bg-gray-700 border dark:border-gray-600 border-l-4 border-l-amber-400',   badge: 'bg-amber-50 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300', label: 'Question',     tooltip: 'Worker is asking the manager for clarification before proceeding'                     },
+  answer:       { wrapper: 'bg-white dark:bg-gray-700 border dark:border-gray-600 border-l-4 border-l-teal-400',    badge: 'bg-teal-50 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300',    label: 'Answer',       tooltip: "Manager answered the worker's question"                                               },
+  review:       { wrapper: 'bg-white dark:bg-gray-700 border dark:border-gray-600 border-l-4 border-l-purple-400',  badge: 'bg-purple-50 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300', label: 'Review',   tooltip: "Manager's full review of the worker's completed work"                                  },
+  correction:   { wrapper: 'bg-white dark:bg-gray-700 border dark:border-gray-600 border-l-4 border-l-orange-400',  badge: 'bg-orange-50 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300', label: 'Correction', tooltip: 'Manager is requesting changes or corrections to the work'                            },
+  directive:    { wrapper: 'bg-white dark:bg-gray-700 border dark:border-gray-600 border-l-4 border-l-indigo-400',  badge: 'bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300', label: 'Directive',  tooltip: 'Manager is giving the worker explicit instructions or guidance'                      },
+  status:       { wrapper: '',                                                                                        badge: 'bg-gray-100 dark:bg-gray-700 text-gray-400',                          label: 'System',       tooltip: 'Automated system event or status update (not from an agent)'                        },
+  'user-input': { wrapper: 'bg-white dark:bg-gray-700 border dark:border-gray-600 border-l-4 border-l-green-400',   badge: 'bg-green-50 dark:bg-green-900/40 text-green-700 dark:text-green-300',  label: 'You',          tooltip: 'Your direct message injected into the conversation'                                  },
+  'exec':       { wrapper: 'bg-gray-900 border-gray-700',                                                            badge: 'bg-gray-700 text-green-400',                                           label: 'Run',          tooltip: 'Shell command requested by the worker to run in the workspace container'              },
+  'exec-result':{ wrapper: 'bg-gray-900 border-gray-700',                                                            badge: 'bg-gray-700 text-gray-300',                                            label: 'Output',       tooltip: 'stdout/stderr output and exit code from the executed shell command'                   },
+  'checkpoint': { wrapper: '',                                                                                        badge: 'bg-indigo-50 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300', label: '📍 Checkpoint', tooltip: 'Workspace snapshot automatically saved after this command succeeded — restorable from the Checkpoints panel' },
 };
 
 const COLLAPSE_THRESHOLD = 400; // chars
@@ -193,18 +193,18 @@ function Entry({
           {new Date(entry.timestamp).toLocaleTimeString()}
         </span>
         {entry.monitorAdvised && (
-          <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 font-semibold border border-teal-200 shrink-0">
+          <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 font-semibold border border-teal-200 dark:border-teal-700 shrink-0">
             📡 monitor advised
           </span>
         )}
       </div>
-      <div className="text-xs leading-relaxed">
+      <div className="text-xs leading-relaxed text-gray-800 dark:text-gray-200">
         {renderContent(displayContent)}
       </div>
       {isLong && (
         <button
           onClick={() => setExpanded(e => !e)}
-          className="mt-2 text-xs text-blue-500 hover:text-blue-700 font-medium"
+          className="mt-2 text-xs text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-medium"
         >
           {expanded ? 'Show less ↑' : 'Show more ↓'}
         </button>
@@ -251,11 +251,11 @@ export default function AgentPanel({
   return (
     <div className="flex flex-col h-full min-w-0">
       {/* Panel header */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b bg-gray-50 shrink-0">
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/80 shrink-0">
         <span className="text-base">{icon}</span>
-        <span className="font-semibold text-sm text-gray-800">{label}</span>
+        <span className="font-semibold text-sm text-gray-800 dark:text-gray-100">{label}</span>
         {modelBadge && (
-          <span className="ml-auto text-xs bg-gray-200 text-gray-600 rounded px-2 py-0.5 truncate max-w-[160px]">
+          <span className="ml-auto text-xs bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded px-2 py-0.5 truncate max-w-[160px]">
             {modelBadge}
           </span>
         )}

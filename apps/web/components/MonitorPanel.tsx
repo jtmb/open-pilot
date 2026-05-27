@@ -12,9 +12,9 @@ export interface DisplayFinding {
 }
 
 const SEV_STYLE: Record<string, { wrap: string; badge: string; icon: string }> = {
-  error:   { wrap: 'bg-red-50 border-red-200',       badge: 'bg-red-100 text-red-700',       icon: '🔴' },
-  warning: { wrap: 'bg-yellow-50 border-yellow-200', badge: 'bg-yellow-100 text-yellow-700', icon: '🟡' },
-  info:    { wrap: 'bg-sky-50 border-sky-200',       badge: 'bg-sky-100 text-sky-700',       icon: '🔵' },
+  error:   { wrap: 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800',       badge: 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300',         icon: '🔴' },
+  warning: { wrap: 'bg-yellow-50 dark:bg-yellow-950/30 border-yellow-200 dark:border-yellow-800', badge: 'bg-yellow-100 dark:bg-yellow-900/50 text-yellow-700 dark:text-yellow-300', icon: '🟡' },
+  info:    { wrap: 'bg-sky-50 dark:bg-sky-950/30 border-sky-200 dark:border-sky-800',       badge: 'bg-sky-100 dark:bg-sky-900/50 text-sky-700 dark:text-sky-300',         icon: '🔵' },
 };
 
 const SEV_TOOLTIP: Record<string, string> = {
@@ -68,11 +68,11 @@ export default function MonitorPanel({ findings, isAnalyzing, models, monitorMod
   });
 
   return (
-    <div className="flex flex-col h-full bg-gray-50">
+    <div className="flex flex-col h-full bg-gray-50 dark:bg-gray-900">
 
       {/* ── Header ── */}
-      <div className="flex items-center gap-1.5 px-3 py-2 border-b bg-white shrink-0 min-w-0 overflow-hidden">
-        <span className="text-sm font-semibold text-gray-700 shrink-0">🔍 Monitor</span>
+      <div className="flex items-center gap-1.5 px-3 py-2 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shrink-0 min-w-0 overflow-hidden">
+        <span className="text-sm font-semibold text-gray-700 dark:text-gray-200 shrink-0">🔍 Monitor</span>
         {isAnalyzing && aiEnabled && (
           <span className="text-[11px] text-blue-500 animate-pulse shrink-0">analyzing…</span>
         )}
@@ -82,8 +82,8 @@ export default function MonitorPanel({ findings, isAnalyzing, models, monitorMod
             title={aiEnabled ? 'Disable AI analysis' : 'Enable AI analysis'}
             className={`text-[11px] px-2 py-0.5 rounded border font-medium whitespace-nowrap transition-colors ${
               aiEnabled
-                ? 'bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100'
-                : 'bg-gray-100 text-gray-400 border-gray-200 hover:bg-gray-200'
+                ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 border-blue-200 dark:border-blue-700 hover:bg-blue-100 dark:hover:bg-blue-900/50'
+                : 'bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 border-gray-200 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-600'
             }`}
           >
             ✨ AI {aiEnabled ? 'on' : 'off'}
@@ -92,7 +92,7 @@ export default function MonitorPanel({ findings, isAnalyzing, models, monitorMod
             <select
               value={monitorModel}
               onChange={e => onMonitorModelChange(e.target.value)}
-              className="text-[11px] border rounded px-1.5 py-0.5 bg-white text-gray-600 max-w-[140px] truncate"
+              className="text-[11px] border border-gray-200 dark:border-gray-600 rounded px-1.5 py-0.5 bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 max-w-[140px] truncate"
               title="Model used for AI analysis"
             >
               {models.map(m => (
@@ -143,7 +143,7 @@ export default function MonitorPanel({ findings, isAnalyzing, models, monitorMod
                       {f.source === 'ai' ? '✨ AI' : '⚡ rule'}
                     </span>
                   </div>
-                  <p className="text-xs text-gray-700 leading-snug break-words">{f.message}</p>
+                  <p className="text-xs text-gray-700 dark:text-gray-300 leading-snug break-words">{f.message}</p>
                 </div>
               </div>
             </div>

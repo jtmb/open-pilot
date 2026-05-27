@@ -900,7 +900,7 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={handleExport}
-            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border bg-white text-gray-600 border-gray-300 hover:bg-gray-50"
+            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600"
             title="Export all logs and monitor findings as JSON"
           >
             ⬇ Export
@@ -908,7 +908,7 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
 
           <button
             onClick={() => setFilesOpen(true)}
-            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border bg-white text-gray-600 border-gray-300 hover:bg-gray-50"
+            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600"
             title="Browse and download files produced by the worker agent"
           >
             📁 Files
@@ -919,7 +919,7 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
             className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border transition-colors ${
               checkpointsOpen
                 ? 'bg-gray-800 text-white border-gray-800'
-                : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
             }`}
             title="View and restore workspace checkpoints"
           >
@@ -990,7 +990,7 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
             className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border transition-colors ${
               monitorOpen
                 ? 'bg-gray-800 text-white border-gray-800'
-                : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
             }`}
           >
             🔍 Monitor
@@ -1034,7 +1034,7 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
           {(run.status === 'running' || run.status === 'paused') && (
             <button
               onClick={handleStop}
-              className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded border border-gray-300 text-gray-600 hover:bg-gray-100"
+              className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
               title="Stop the run (use Resume to continue, or Delete to remove)"
             >
               ⏹ Stop
@@ -1046,7 +1046,7 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
               className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border transition-colors ${
                 restartConfirm
                   ? 'bg-red-500 text-white border-red-500 hover:bg-red-600'
-                  : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                  : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
               }`}
               title={restartConfirm ? 'Click again to confirm — this clears all history' : 'Restart run from the beginning'}
             >
@@ -1094,7 +1094,7 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
 
           <button
             onClick={onDelete}
-            className="px-3 py-1.5 text-xs font-semibold rounded border border-red-200 text-red-500 hover:bg-red-50"
+            className="px-3 py-1.5 text-xs font-semibold rounded border border-red-200 dark:border-red-800 text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
           >
             🗑 Delete
           </button>
@@ -1102,7 +1102,7 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
       </div>
 
       {/* ── Panels ── */}
-      <div className="flex flex-1 overflow-hidden divide-x">
+      <div className="flex flex-1 overflow-hidden divide-x divide-gray-200 dark:divide-gray-700">
         <div className="flex-1 overflow-hidden">
           <AgentPanel
             label="Worker Agent"
@@ -1170,11 +1170,11 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
       )}
 
       {/* ── User steer bar ── */}
-      <div className="flex items-start gap-2 px-4 py-3 border-t bg-gray-50 shrink-0">
+      <div className="flex items-start gap-2 px-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 shrink-0">
         <div className="flex-1 relative">
           <textarea
             rows={2}
-            className="w-full border rounded px-3 py-2 text-sm resize-none pr-2"
+            className="w-full border border-gray-200 dark:border-gray-600 rounded px-3 py-2 text-sm resize-none pr-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             placeholder="Steer the run — inject a message into either agent…"
             value={injectText}
             onChange={e => setInjectText(e.target.value)}
@@ -1190,13 +1190,13 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
           <div className="flex gap-1">
             <button
               onClick={() => setInjectTarget('worker')}
-              className={`px-2 py-1 text-xs rounded border font-medium ${injectTarget === 'worker' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+              className={`px-2 py-1 text-xs rounded border font-medium ${injectTarget === 'worker' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'}`}
             >
               👷 Worker
             </button>
             <button
               onClick={() => setInjectTarget('manager')}
-              className={`px-2 py-1 text-xs rounded border font-medium ${injectTarget === 'manager' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+              className={`px-2 py-1 text-xs rounded border font-medium ${injectTarget === 'manager' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'}`}
             >
               🧑‍💼 Manager
             </button>
