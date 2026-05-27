@@ -102,7 +102,7 @@ export default function ChatBox({ conversation, model, mode, reasoningEffort, on
   return (
     <div className="flex flex-col h-full">
       {/* Badge showing active model / mode + approval mode */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b bg-gray-50 text-xs text-gray-500 flex-wrap">
+      <div className="flex items-center gap-2 px-4 py-2 border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400 flex-wrap">
         <span className="bg-gray-200 rounded px-2 py-0.5">{model}</span>
         <span className="bg-gray-200 rounded px-2 py-0.5 capitalize">{mode}</span>
         {reasoningEffort && (
@@ -125,7 +125,7 @@ export default function ChatBox({ conversation, model, mode, reasoningEffort, on
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-auto p-6 space-y-4 bg-white">
+      <div className="flex-1 overflow-auto p-6 space-y-4 bg-white dark:bg-gray-900">
         {conversation.messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-2">
             <span className="text-4xl">💬</span>
@@ -138,7 +138,7 @@ export default function ChatBox({ conversation, model, mode, reasoningEffort, on
               className={`rounded-2xl px-4 py-2 max-w-2xl whitespace-pre-wrap text-sm leading-relaxed ${
                 msg.role === 'user'
                   ? 'bg-blue-600 text-white'
-                  : 'bg-gray-100 text-gray-900'
+                  : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100'
               }`}
             >
               {msg.content}
@@ -152,7 +152,7 @@ export default function ChatBox({ conversation, model, mode, reasoningEffort, on
         ))}
         {loading && (
           <div className="flex justify-start">
-            <div className="rounded-2xl px-4 py-2 bg-gray-100 text-gray-500 text-sm animate-pulse">
+            <div className="rounded-2xl px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 text-sm animate-pulse">
               Thinking…
             </div>
           </div>
@@ -162,11 +162,11 @@ export default function ChatBox({ conversation, model, mode, reasoningEffort, on
 
       {/* Input */}
       <form
-        className="flex p-4 border-t bg-gray-50 gap-2"
+        className="flex p-4 border-t bg-gray-50 dark:bg-gray-800 dark:border-gray-700 gap-2"
         onSubmit={e => { e.preventDefault(); sendMessage(); }}
       >
         <textarea
-          className="flex-1 border rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="flex-1 border rounded-xl px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400"
           placeholder="Type your message…"
           rows={2}
           value={input}

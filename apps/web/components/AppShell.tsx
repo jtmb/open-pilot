@@ -4,6 +4,7 @@ import { SessionProvider, useSession } from 'next-auth/react';
 import LoginScreen from './LoginScreen';
 import Sidebar, { type Conversation } from './Sidebar';
 import Dashboard from './Dashboard';
+import ApiKeysManager from './ApiKeysManager';
 import ChatBox, { type ConversationData } from './ChatBox';
 import Documentation from './Documentation';
 import ModelSelector, { type Mode, type CopilotModel } from './ModelSelector';
@@ -51,7 +52,7 @@ function AppShellInner() {
       .catch(() => setCredChecked(true));
   }, []);
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'chat' | 'docs' | 'autopilot'>('chat');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'chat' | 'docs' | 'autopilot' | 'apikeys'>('chat');
   const [model, setModel] = useState('');
   const [mode, setMode]   = useState<Mode>('ask');
   const [reasoningEffort, setReasoningEffort] = useState('');
@@ -102,8 +103,29 @@ function AppShellInner() {
         loadedRef.current.add(first.id);
       }
 
-      // Load agent runs from localStorage
-      const storedRuns = loadAgentRuns();
+      // Load agent runs from localStorage.
+      // Any run still marked 'running' means the server was killed mid-execution —
+      // transition it to 'error' so AgentWorkspace can auto-resume it.
+      const rawRuns = loadAgentRuns();
+      const storedRuns = rawRuns.map(r => {
+        if (r.status !== 'running') return r;
+        return {
+          ...r,
+          status: 'error' as const,
+          log: [
+            ...r.log,
+            {
+              id: Date.now().toString(36) + Math.random().toString(36).slice(2),
+              timestamp: Date.now(),
+              from: 'system' as const,
+              type: 'status' as const,
+              content: '⚠ Run was interrupted by a server restart. Auto-resuming…',
+              target: 'both' as const,
+            },
+          ],
+          updatedAt: Date.now(),
+        };
+      });
       setAgentRuns(storedRuns);
       const storedRunId = localStorage.getItem(ACTIVE_RUN_KEY);
       if (storedRunId && storedRuns.find(r => r.id === storedRunId)) {
@@ -287,9 +309,9 @@ function AppShellInner() {
           onNewRun={() => setShowNewRunModal(true)}
         />
 
-        <main className="flex-1 flex flex-col bg-gray-50 min-w-0">
-          <header className="flex items-center justify-between px-6 py-3 border-b bg-white shrink-0">
-            <h1 className="text-xl font-bold">OpenPilot for VS Code</h1>
+        <main className="flex-1 flex flex-col bg-gray-50 dark:bg-gray-900 min-w-0">
+          <header className="flex items-center justify-between px-6 py-3 border-b bg-white dark:bg-gray-900 dark:border-gray-700 shrink-0">
+            <h1 className="text-xl font-bold dark:text-white">OpenPilot for VS Code</h1>
             <div className="flex items-center gap-3">
               <ModelSelector
                 model={model}
@@ -314,8 +336,9 @@ function AppShellInner() {
           <SetupCopilot />
 
           <section className="flex-1 overflow-hidden">
-            {activeTab === 'dashboard' && <Dashboard />}
+            {activeTab === 'dashboard' && <Dashboard agentRuns={agentRuns} conversations={conversations} onSelectRun={(id) => { setActiveRunId(id); setActiveTab('autopilot'); }} onSelectConv={(id) => { setActiveId(id); setActiveTab('chat'); }} />}
             {activeTab === 'docs'      && <Documentation />}
+            {activeTab === 'apikeys'   && <ApiKeysManager />}
             {activeTab === 'chat'      && hydrated && activeConversation && (
               <ChatBox
                 key={activeConversation.id}

@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSession } from 'next-auth/react';
 import AgentPanel from './AgentPanel';
 import FilesModal from './FilesModal';
 import MonitorPanel, { type DisplayFinding } from './MonitorPanel';
@@ -15,6 +16,7 @@ import {
   type RunStatus,
 } from '@/services/agentOrchestrator';
 import CheckpointsPanel from './CheckpointsPanel';
+import GitHubPushModal from './GitHubPushModal';
 import type { ParsedFile } from '@/utils/fileParser';
 
 // ─── Format monitor findings into a manager advisory message ──────────────────
@@ -180,7 +182,10 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
   const pendingAdvisoryRef = useRef<DisplayFinding[]>([]);
 
   // GitHub push state (transient — not persisted)
-  const [pushState, setPushState] = useState<{ status: 'idle' | 'pushing' | 'success' | 'error'; message?: string }>({ status: 'idle' });
+  const [showPushModal, setShowPushModal] = useState(false);
+  const [pushState, setPushState] = useState<{ status: 'idle' | 'pushing' | 'success' | 'error'; url?: string; message?: string }>({ status: 'idle' });
+
+  const { data: session } = useSession();
 
   // Refs to access latest values inside async loops without stale closures
   const runRef            = useRef<AgentRun>(run);
@@ -614,6 +619,16 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
     executeLoop();
   }, [executeLoop, setRunAndSync]);
 
+  // ── Auto-resume on startup (server-restart recovery) ─────────────────────
+  // If this run is in 'error' state when first mounted, it was interrupted by a
+  // server restart — auto-resume it after a brief delay so the UI can settle.
+  useEffect(() => {
+    if (initialRun.status !== 'error') return;
+    const t = setTimeout(() => handleResume(), 1500);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleStop = useCallback(() => {
     loopRef.current = false;
     setPreviewUrl(null);
@@ -690,35 +705,37 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
     setRunAndSync(restarted);
   }, [restartConfirm, setRunAndSync]);
 
-  // ── GitHub push helper ────────────────────────────────────────────────────
-  const triggerGitPush = useCallback((remoteUrl: string) => {
-    setPushState({ status: 'pushing' });
-    fetch('/api/exec/git-push', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ runId: runRef.current.id, remoteUrl }),
-    })
-      .then(r => r.json() as Promise<{ ok: boolean; output?: string }>)
-      .then(d => {
-        setPushState(d.ok
-          ? { status: 'success', message: 'Pushed to GitHub.' }
-          : { status: 'error',   message: d.output ?? 'Push failed' });
-      })
-      .catch(e => {
-        setPushState({ status: 'error', message: e instanceof Error ? e.message : 'Push failed' });
-      });
-  }, []);
-
-  // Auto-push when job reaches 'complete' status
+  // ── Auto-push on completion (when configured at run creation) ─────────────
   useEffect(() => {
     if (run.status !== 'complete') return;
-    const remote = run.config.githubRepo;
-    if (!remote || pushState.status !== 'idle') return;
-    triggerGitPush(remote);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [run.status]);
+    if (!run.config.pushToGithub) return;
+    if (pushState.status !== 'idle') return;
+    const accessToken = (session as any)?.accessToken as string | undefined;
+    if (!accessToken) return;
 
-  /** Called by CheckpointsPanel after a successful restore — informs both agents and pauses if running */
+    const slug = (n: string) =>
+      n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) || 'my-project';
+    const repoName = run.config.githubRepo?.trim() || slug(run.title);
+
+    setPushState({ status: 'pushing' });
+    fetch('/api/github/create-and-push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId: run.id, repoName, accessToken }),
+    })
+      .then(r => r.json() as Promise<{ ok: boolean; repoUrl?: string; error?: string }>)
+      .then(d => {
+        if (d.ok) {
+          setPushState({ status: 'success', url: d.repoUrl });
+        } else {
+          setPushState({ status: 'error', message: d.error ?? 'Push failed' });
+        }
+      })
+      .catch(e => setPushState({ status: 'error', message: e instanceof Error ? e.message : 'Push failed' }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run.status, session]);
+
+  // ── GitHub push helper ────────────────────────────────────────────────────
   const handleRestored = useCallback(() => {
     const r = runRef.current;
     const restoreMsg =
@@ -863,11 +880,11 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
   const managerLoading = isStepping && (run.nextStep !== 'worker-execute' && run.nextStep !== null);
 
   return (
-    <div className="flex flex-col h-full bg-white">
+    <div className="flex flex-col h-full bg-white dark:bg-gray-900">
 
       {/* ── Top bar ── */}
-      <div className="flex items-center gap-3 px-5 py-3 border-b bg-gray-50 shrink-0 flex-wrap gap-y-2">
-        <span className="font-bold text-gray-800 truncate max-w-xs">{run.title}</span>
+      <div className="flex items-center gap-3 px-5 py-3 border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700 shrink-0 flex-wrap gap-y-2">
+        <span className="font-bold text-gray-800 dark:text-gray-100 truncate max-w-xs">{run.title}</span>
 
         <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${badge.cls}`}>
           {badge.label}
@@ -1037,28 +1054,42 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
             </button>
           )}
 
-          {/* GitHub push button — shown when configured and run is not actively running */}
-          {run.config.githubRepo && run.status !== 'running' && run.status !== 'idle' && (
-            <button
-              disabled={pushState.status === 'pushing'}
-              onClick={() => triggerGitPush(run.config.githubRepo!)}
-              title={
-                pushState.status === 'success' ? `Last push succeeded. Click to push again.\n${pushState.message ?? ''}` :
-                pushState.status === 'error'   ? `Last push failed: ${pushState.message ?? ''}. Click to retry.` :
-                `Push workspace to ${run.config.githubRepo}`
-              }
-              className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border transition-colors ${
-                pushState.status === 'pushing' ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed' :
-                pushState.status === 'success' ? 'bg-green-50 text-green-700 border-green-300 hover:bg-green-100' :
-                pushState.status === 'error'   ? 'bg-red-50 text-red-600 border-red-300 hover:bg-red-100' :
-                'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              {pushState.status === 'pushing' ? '⏳ Pushing…' :
-               pushState.status === 'success' ? '✓ Pushed'   :
-               pushState.status === 'error'   ? '✗ Push failed' :
-               '⬆ Push to GitHub'}
-            </button>
+          {/* GitHub push button — shown when run is not actively running */}
+          {run.status !== 'running' && run.status !== 'idle' && (
+            <>
+              {/* Auto-push status badge (when configured at run creation) */}
+              {run.config.pushToGithub && pushState.status !== 'idle' ? (
+                <span
+                  title={pushState.url ? `View at ${pushState.url}` : pushState.message}
+                  className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border ${
+                    pushState.status === 'pushing' ? 'bg-gray-100 dark:bg-gray-700 text-gray-400 border-gray-200 dark:border-gray-600 cursor-default' :
+                    pushState.status === 'success' ? 'bg-green-50 dark:bg-green-950/40 text-green-700 dark:text-green-400 border-green-300 dark:border-green-800 cursor-default' :
+                    'bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 border-red-300 dark:border-red-800 cursor-default'
+                  }`}
+                >
+                  {pushState.status === 'pushing' && '⏳ Pushing…'}
+                  {pushState.status === 'success' && (
+                    pushState.url
+                      ? <a href={pushState.url} target="_blank" rel="noreferrer" className="hover:underline">✓ Pushed to GitHub ↗</a>
+                      : '✓ Pushed to GitHub'
+                  )}
+                  {pushState.status === 'error' && `✗ Push failed`}
+                </span>
+              ) : (
+                /* Manual push button — always available */
+                <button
+                  onClick={() => setShowPushModal(true)}
+                  title={pushState.status === 'success' ? `Pushed to ${pushState.url}. Click to push again.` : 'Push workspace to a new GitHub repository'}
+                  className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border transition-colors ${
+                    pushState.status === 'success'
+                      ? 'bg-green-50 dark:bg-green-950/40 text-green-700 dark:text-green-400 border-green-300 dark:border-green-800 hover:bg-green-100'
+                      : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {pushState.status === 'success' ? '✓ Pushed to GitHub' : '⬆ Push to GitHub'}
+                </button>
+              )}
+            </>
           )}
 
           <button
@@ -1179,6 +1210,18 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
           </button>
         </div>
       </div>
+
+      {showPushModal && (
+        <GitHubPushModal
+          runId={run.id}
+          runTitle={run.title}
+          onClose={() => setShowPushModal(false)}
+          onSuccess={(url) => {
+            setPushState({ status: 'success', url });
+            setShowPushModal(false);
+          }}
+        />
+      )}
     </div>
   );
 }

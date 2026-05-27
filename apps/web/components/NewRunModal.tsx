@@ -13,8 +13,8 @@ interface SavedRunPrefs {
   fillModel?: string;
   maxIterations?: number;
   approvalMode?: 'approvals' | 'bypass' | 'autopilot';
-  githubRepo?: string;
   pushToGithub?: boolean;
+  githubRepo?: string;
   category?: PersonalityId;
 }
 
@@ -94,6 +94,7 @@ export default function NewRunModal({ onStart, onClose }: Props) {
   const [approvalMode, setApprovalMode] = useState<'approvals' | 'bypass' | 'autopilot'>('approvals');
   const [pushToGithub, setPushToGithub] = useState(false);
   const [githubRepo, setGithubRepo] = useState('');
+  const [aiChooseRepo, setAiChooseRepo] = useState(false);
   const [category, setCategory] = useState<PersonalityId>('developer');
   const [specFullscreen, setSpecFullscreen] = useState(false);
 
@@ -135,8 +136,8 @@ export default function NewRunModal({ onStart, onClose }: Props) {
           if (saved.managerEffort !== undefined) setManagerEffort(saved.managerEffort);
           if (saved.maxIterations !== undefined) setMaxIterations(saved.maxIterations);
           if (saved.approvalMode  !== undefined) setApprovalMode(saved.approvalMode);
-          if (saved.githubRepo    !== undefined) setGithubRepo(saved.githubRepo);
           if (saved.pushToGithub  !== undefined) setPushToGithub(saved.pushToGithub);
+          if (saved.githubRepo    !== undefined) setGithubRepo(saved.githubRepo);
           if (saved.category      !== undefined) setCategory(saved.category);
         }
       })
@@ -175,10 +176,11 @@ export default function NewRunModal({ onStart, onClose }: Props) {
       managerReasoningEffort: managerEffort,
       maxIterations,
       approvalMode,
-      githubRepo: pushToGithub && githubRepo.trim() ? githubRepo.trim() : undefined,
+      pushToGithub: pushToGithub || undefined,
+      githubRepo: pushToGithub && !aiChooseRepo && githubRepo.trim() ? githubRepo.trim() : undefined,
       category,
     };
-    savePrefs({ workerModel, workerEffort, managerModel, managerEffort, fillModel, maxIterations, approvalMode, githubRepo, pushToGithub, category });
+    savePrefs({ workerModel, workerEffort, managerModel, managerEffort, fillModel, maxIterations, approvalMode, pushToGithub, githubRepo, category });
     onStart(createAgentRun(title.trim(), spec.trim(), config));
   };
 
@@ -351,7 +353,9 @@ export default function NewRunModal({ onStart, onClose }: Props) {
             </div>
           </div>
 
-          {/* GitHub push */}
+          {/* GitHub push — handled post-completion via the workspace toolbar */}
+
+          {/* Create GitHub repo */}
           <div className="space-y-2">
             <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
               <input
@@ -363,24 +367,39 @@ export default function NewRunModal({ onStart, onClose }: Props) {
                 }}
                 className="rounded"
               />
-              <span className="font-medium">Push to GitHub when complete</span>
+              <span className="font-medium">Create GitHub repo when complete</span>
             </label>
             {pushToGithub && (
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">
-                  Remote URL
-                  <span className="ml-1 font-normal text-gray-400">(include token for private repos: https://TOKEN@github.com/user/repo.git)</span>
+              <div className="ml-5 space-y-2">
+                <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={aiChooseRepo}
+                    onChange={e => setAiChooseRepo(e.target.checked)}
+                    className="rounded"
+                  />
+                  <span>Let AI choose a name based on the specification</span>
                 </label>
-                <input
-                  type="text"
-                  className="w-full border rounded px-3 py-2 text-sm font-mono"
-                  placeholder="https://github.com/user/repo.git"
-                  value={githubRepo}
-                  onChange={e => {
-                    setGithubRepo(e.target.value);
-                    savePrefs({ githubRepo: e.target.value });
-                  }}
-                />
+                {!aiChooseRepo && (
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Repository name</label>
+                    <input
+                      type="text"
+                      className="w-full border rounded px-3 py-1.5 text-sm"
+                      placeholder={title.trim() ? title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) || 'my-project' : 'my-project'}
+                      value={githubRepo}
+                      onChange={e => {
+                        setGithubRepo(e.target.value);
+                        savePrefs({ githubRepo: e.target.value });
+                      }}
+                    />
+                  </div>
+                )}
+                {aiChooseRepo && title.trim() && (
+                  <p className="text-xs text-indigo-600 bg-indigo-50 rounded px-3 py-1.5">
+                    Will create: <span className="font-mono font-semibold">{title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) || 'my-project'}</span>
+                  </p>
+                )}
               </div>
             )}
           </div>

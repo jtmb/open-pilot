@@ -74,7 +74,9 @@ export interface AgentRunConfig {
   managerReasoningEffort: string;
   maxIterations: number;
   approvalMode: 'approvals' | 'bypass' | 'autopilot';
-  /** Optional GitHub remote URL — if set, the workspace is pushed here on completion */
+  /** When true, automatically create a GitHub repo and push on completion */
+  pushToGithub?: boolean;
+  /** Desired repo name slug (empty string = derive from run title) */
   githubRepo?: string;
   /** Agent personality category */
   category?: PersonalityId;

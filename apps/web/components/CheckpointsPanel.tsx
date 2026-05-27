@@ -73,6 +73,8 @@ export default function CheckpointsPanel({
   const [diffs, setDiffs] = useState<Record<string, DiffState>>({});
   // Which checkpoint diff is expanded (only one at a time)
   const [diffOpen, setDiffOpen] = useState<string | null>(null);
+  // Fullscreen diff overlay
+  const [fullscreenDiff, setFullscreenDiff] = useState<string | null>(null);
 
   const setState = (id: string, s: string) =>
     setStates(prev => ({ ...prev, [id]: s }));
@@ -255,7 +257,16 @@ export default function CheckpointsPanel({
                   {/* Diff viewer */}
                   {diffOpen === cp.id && (
                     <div className="mt-2 rounded border border-gray-200 bg-gray-50 px-3 py-2 max-h-80 overflow-y-auto">
-                      <p className="text-[10px] text-gray-400 mb-1">Changes since this checkpoint → current state</p>
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-[10px] text-gray-400">Changes since this checkpoint → current state</p>
+                        <button
+                          onClick={() => setFullscreenDiff(cp.id)}
+                          title="Expand to fullscreen"
+                          className="text-[10px] text-gray-400 hover:text-gray-600 px-1.5 py-0.5 rounded border border-gray-200 hover:border-gray-300 transition-colors"
+                        >
+                          ⛶ Fullscreen
+                        </button>
+                      </div>
                       {!diffs[cp.id] || diffs[cp.id].status === 'loading' ? (
                         <p className="text-xs text-gray-400 animate-pulse">Loading diff…</p>
                       ) : diffs[cp.id].status === 'error' ? (
@@ -271,6 +282,61 @@ export default function CheckpointsPanel({
           </ul>
         )}
       </div>
+
+      {/* Fullscreen diff overlay */}
+      {fullscreenDiff && (() => {
+        const cp = checkpoints.find(c => c.id === fullscreenDiff);
+        if (!cp) return null;
+        const d = diffs[fullscreenDiff];
+        return (
+          <div
+            className="fixed inset-0 z-50 bg-black/80 flex flex-col"
+            onClick={e => { if (e.target === e.currentTarget) setFullscreenDiff(null); }}
+          >
+            <div className="flex flex-col flex-1 min-h-0 bg-gray-950 m-3 rounded-xl overflow-hidden shadow-2xl">
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800 shrink-0">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-indigo-400 truncate">{cp.name ?? `Checkpoint ${cp.id}`}</p>
+                  <p className="text-xs text-gray-500 truncate mt-0.5">{cp.label.replace(/^exec:\s*/, '')} · {cp.commitHash.slice(0, 7)}</p>
+                </div>
+                <button
+                  onClick={() => setFullscreenDiff(null)}
+                  className="text-gray-400 hover:text-white text-2xl leading-none ml-4 shrink-0"
+                  aria-label="Close fullscreen diff"
+                >
+                  ×
+                </button>
+              </div>
+              {/* Diff content */}
+              <div className="flex-1 overflow-auto px-6 py-4">
+                <p className="text-[11px] text-gray-500 mb-3">Changes since this checkpoint → current state</p>
+                {!d || d.status === 'loading' ? (
+                  <p className="text-sm text-gray-400 animate-pulse">Loading diff…</p>
+                ) : d.status === 'error' ? (
+                  <p className="text-sm text-red-400">❌ {d.content}</p>
+                ) : (
+                  <pre className="text-xs font-mono leading-snug overflow-x-auto whitespace-pre">
+                    {d.content.split('\n').map((line, i) => {
+                      let cls = 'text-gray-400';
+                      if (line.startsWith('diff --git') || line.startsWith('index ') || line.startsWith('--- ') || line.startsWith('+++ ')) {
+                        cls = 'text-gray-300 font-semibold';
+                      } else if (line.startsWith('@@')) {
+                        cls = 'text-blue-400';
+                      } else if (line.startsWith('+')) {
+                        cls = 'text-green-400 bg-green-950/40';
+                      } else if (line.startsWith('-')) {
+                        cls = 'text-red-400 bg-red-950/40';
+                      }
+                      return <span key={i} className={`block ${cls}`}>{line || ' '}</span>;
+                    })}
+                  </pre>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

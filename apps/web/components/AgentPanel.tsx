@@ -262,7 +262,7 @@ export default function AgentPanel({
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-white" ref={containerRef}>
+      <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-white dark:bg-gray-800" ref={containerRef}>
         {visible.length === 0 && (
           <div className="flex items-center justify-center h-full text-gray-400 text-sm">
             {loading ? 'Waiting…' : 'No messages yet.'}

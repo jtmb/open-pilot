@@ -24,3 +24,15 @@ model User {
   createdAt BigInt
   updatedAt BigInt
 }
+
+model ApiKey {
+  id         String  @id
+  name       String
+  keyHash    String  @unique
+  keyPrefix  String
+  model      String  @default("gpt-4o")
+  enabled    Boolean @default(true)
+  createdAt  BigInt
+  lastUsedAt BigInt?
+  usageCount Int     @default(0)
+}
