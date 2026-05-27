@@ -6,8 +6,34 @@ import path from 'path';
 
 const DB_PATH = process.env.DATABASE_URL?.replace(/^file:/, '') ?? '/data/openpilot.db';
 const BACKUP_DIR = path.join(path.dirname(DB_PATH), 'backups');
+const CONFIG_PATH = path.join(path.dirname(DB_PATH), 'backup-config.json');
 const MAX_BACKUPS = 10;
-const AUTO_INTERVAL_MS = 6 * 60 * 60 * 1000; // every 6 hours
+
+// ── Backup config ─────────────────────────────────────────────────────────────
+
+export interface BackupConfig {
+  enabled: boolean;
+  /** How often to auto-backup, in hours */
+  intervalHours: number;
+}
+
+const DEFAULT_CONFIG: BackupConfig = { enabled: true, intervalHours: 6 };
+
+export function getAutoBackupConfig(): BackupConfig {
+  try {
+    if (fs.existsSync(CONFIG_PATH)) {
+      return { ...DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) };
+    }
+  } catch { /* ignore */ }
+  return { ...DEFAULT_CONFIG };
+}
+
+export function setAutoBackupConfig(patch: Partial<BackupConfig>): BackupConfig {
+  const next = { ...getAutoBackupConfig(), ...patch };
+  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2), 'utf8'); } catch { /* ignore */ }
+  _restartTimer(next);
+  return next;
+}
 
 export interface BackupInfo {
   filename: string;
@@ -76,13 +102,11 @@ export async function restoreBackup(filename: string): Promise<void> {
   const src = getBackupPath(filename);
   if (!fs.existsSync(src)) throw new Error('Backup file not found');
 
-  // Disconnect Prisma so it releases its file handle
   const { prisma } = await import('../lib/prisma');
   await prisma.$disconnect();
 
   fs.copyFileSync(src, DB_PATH);
 
-  // Reconnect by importing fresh (Next.js dev mode re-uses global, prod does new instance)
   await prisma.$connect();
 }
 
@@ -90,7 +114,6 @@ export async function restoreBackup(filename: string): Promise<void> {
 export async function importDatabase(buffer: Buffer): Promise<void> {
   if (!DB_PATH) throw new Error('DATABASE_URL not set');
 
-  // Validate SQLite magic bytes
   const SQLITE_MAGIC = Buffer.from('SQLite format 3\0');
   if (!buffer.slice(0, 16).equals(SQLITE_MAGIC)) {
     throw new Error('File does not appear to be a valid SQLite database');
@@ -118,18 +141,32 @@ function pruneOldBackups() {
   } catch { /* ignore */ }
 }
 
-// ── Auto-backup scheduler (started once per server process) ──────────────────
+// ── Auto-backup scheduler ─────────────────────────────────────────────────────
+
 let _autoBackupStarted = false;
+let _timer: ReturnType<typeof setInterval> | null = null;
+
+function _run() {
+  try {
+    const cfg = getAutoBackupConfig();
+    if (cfg.enabled) backupDatabase();
+  } catch { /* ignore transient errors */ }
+}
+
+function _restartTimer(cfg: BackupConfig) {
+  if (_timer) { clearInterval(_timer); _timer = null; }
+  if (!cfg.enabled) return;
+  _timer = setInterval(_run, cfg.intervalHours * 60 * 60 * 1000);
+}
 
 export function startAutoBackup() {
   if (_autoBackupStarted) return;
   _autoBackupStarted = true;
 
-  // Run once shortly after startup, then on interval
-  const run = () => {
-    try { backupDatabase(); } catch { /* ignore startup errors (DB may not exist yet) */ }
-  };
+  // Run a startup backup immediately (non-blocking, errors swallowed)
+  setImmediate(_run);
 
-  setTimeout(run, 30_000); // 30s after startup
-  setInterval(run, AUTO_INTERVAL_MS);
+  const cfg = getAutoBackupConfig();
+  _restartTimer(cfg);
 }
+

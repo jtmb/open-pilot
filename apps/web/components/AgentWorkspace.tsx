@@ -250,6 +250,31 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [monitorOpen, monitorAiEnabled, allFindings]);
 
+  // ── Status-change notifications ──────────────────────────────────────────
+  const prevStatusRef = useRef<string>(run.status);
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    const current = run.status;
+    prevStatusRef.current = current;
+    // Only fire when transitioning into a terminal/notable state (not on mount)
+    if (prev === current) return;
+    const fireNotification = (event: string, title: string, message: string) => {
+      fetch('/api/notifications/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event, title, message }),
+      }).catch(() => {});
+    };
+    if (current === 'error') {
+      fireNotification('agentError', `Agent Run Error: ${run.title}`, `The agent run "${run.title}" encountered an error after ${run.currentIteration} steps.`);
+    } else if (current === 'complete') {
+      fireNotification('agentComplete', `Agent Run Complete: ${run.title}`, `The agent run "${run.title}" finished successfully after ${run.currentIteration} steps.`);
+    } else if (current === 'paused' && prev === 'running') {
+      fireNotification('agentPaused', `Agent Run Paused: ${run.title}`, `The agent run "${run.title}" was paused after ${run.currentIteration} steps.`);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run.status]);
+
   // ── Monitor helpers ──────────────────────────────────────────────────────
 
   const addRuleFindings = useCallback((findings: DisplayFinding[], currentIter: number) => {
@@ -577,7 +602,7 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
 
   // ── Controls ──────────────────────────────────────────────────────────────
 
-  const handleStart = useCallback(() => {
+  const handleStart = useCallback(async () => {
     setPreviewUrl(null);
     // Stop any running preview from a previous run of the same id
     fetch('/api/exec/serve', {
@@ -585,14 +610,66 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ runId: runRef.current.id }),
     }).catch(() => {});
-    // Initialise workspace with AGENTS.md + CLAUDE.md (fire-and-forget before loop)
-    fetch('/api/exec/workspace-init', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ runId: runRef.current.id, title: runRef.current.title, spec: runRef.current.spec }),
-    }).catch(() => {});
-    const started = { ...runRef.current, status: 'running' as RunStatus };
+
+    const r = runRef.current;
+    const hasExistingRepo = !!r.config.existingRepo;
+
+    // Mark as running immediately; add a log entry if cloning
+    const started: AgentRun = {
+      ...r,
+      status: 'running' as RunStatus,
+      updatedAt: Date.now(),
+      log: hasExistingRepo
+        ? [...r.log, logEntry('system', 'status', `⏳ Cloning \`${r.config.existingRepo}\` and checking out branch \`${r.config.featureBranch}\`…`, 'both')]
+        : r.log,
+    };
     setRunAndSync(started);
+
+    // Initialise workspace — await when cloning so the agent doesn't run before the repo exists
+    try {
+      const initRes = await fetch('/api/exec/workspace-init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          runId: r.id,
+          title: r.title,
+          spec: r.spec,
+          existingRepo: r.config.existingRepo,
+          featureBranch: r.config.featureBranch,
+        }),
+      });
+
+      if (hasExistingRepo) {
+        const initData = await initRes.json() as { ok?: boolean; error?: string; branchPushed?: boolean };
+        if (!initRes.ok || !initData.ok) {
+          setRunAndSync({
+            ...runRef.current,
+            status: 'error' as RunStatus,
+            updatedAt: Date.now(),
+            log: [...runRef.current.log, logEntry('system', 'status', `❌ Clone failed: ${initData.error ?? 'unknown error'}`, 'both')],
+          });
+          return;
+        }
+        const pushNote = initData.branchPushed
+          ? `✅ Cloned repo and published branch \`${r.config.featureBranch}\`. Starting run…`
+          : `✅ Cloned repo and created branch \`${r.config.featureBranch}\` (remote push failed — agent can push when ready). Starting run…`;
+        setRunAndSync({
+          ...runRef.current,
+          log: [...runRef.current.log, logEntry('system', 'status', pushNote, 'both')],
+        });
+      }
+    } catch (err) {
+      if (hasExistingRepo) {
+        setRunAndSync({
+          ...runRef.current,
+          status: 'error' as RunStatus,
+          updatedAt: Date.now(),
+          log: [...runRef.current.log, logEntry('system', 'status', `❌ Failed to initialize workspace: ${(err as Error).message}`, 'both')],
+        });
+        return;
+      }
+    }
+
     executeLoop();
   }, [executeLoop, setRunAndSync]);
 
@@ -696,11 +773,11 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
       nextStep: 'manager-init',
       checkpoints: [],
     };
-    // Re-seed the workspace with AGENTS.md + CLAUDE.md
+    // Re-seed the workspace with AGENTS.md + CLAUDE.md (or re-clone if applicable)
     fetch('/api/exec/workspace-init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ runId: r.id, title: r.title, spec: r.spec }),
+      body: JSON.stringify({ runId: r.id, title: r.title, spec: r.spec, existingRepo: r.config.existingRepo, featureBranch: r.config.featureBranch }),
     }).catch(() => {});
     setRunAndSync(restarted);
   }, [restartConfirm, setRunAndSync]);

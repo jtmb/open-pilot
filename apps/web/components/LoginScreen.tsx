@@ -1,49 +1,13 @@
 'use client';
 import { signIn } from 'next-auth/react';
-import { useEffect, useState } from 'react';
-
-interface StoredUser {
-  id: string;
-  name: string;
-  email: string;
-  image?: string | null;
-}
+import { useState } from 'react';
 
 export default function LoginScreen() {
-  const [storedUser, setStoredUser] = useState<StoredUser | null>(null);
   const [signingIn, setSigningIn] = useState(false);
-  const [offlineLoading, setOfflineLoading] = useState(false);
-
-  useEffect(() => {
-    fetch('/api/auth/stored-user')
-      .then(r => r.json())
-      .then((d: { user?: StoredUser | null }) => {
-        if (d.user) setStoredUser(d.user);
-      })
-      .catch(() => {});
-  }, []);
 
   const handleGithub = () => {
     setSigningIn(true);
     signIn('github').catch(() => setSigningIn(false));
-  };
-
-  const handleOffline = async () => {
-    if (!storedUser || offlineLoading) return;
-    setOfflineLoading(true);
-    try {
-      const result = await signIn('stored-session', {
-        userId: storedUser.id,
-        redirect: false,
-      });
-      if (result?.ok) {
-        window.location.reload();
-      } else {
-        setOfflineLoading(false);
-      }
-    } catch {
-      setOfflineLoading(false);
-    }
   };
 
   return (
@@ -61,7 +25,7 @@ export default function LoginScreen() {
         {/* GitHub sign-in */}
         <button
           onClick={handleGithub}
-          disabled={signingIn || offlineLoading}
+          disabled={signingIn}
           className="w-full flex items-center justify-center gap-2.5 px-4 py-3 bg-gray-900 text-white rounded-lg font-semibold text-sm hover:bg-gray-800 disabled:opacity-50 transition-colors"
         >
           <svg viewBox="0 0 24 24" className="w-5 h-5 fill-current" aria-hidden="true">
@@ -69,36 +33,6 @@ export default function LoginScreen() {
           </svg>
           {signingIn ? 'Redirecting…' : 'Sign in with GitHub'}
         </button>
-
-        {/* Offline fallback */}
-        {storedUser && (
-          <>
-            <div className="flex items-center gap-3 text-xs text-gray-400">
-              <div className="flex-1 h-px bg-gray-200" />
-              or
-              <div className="flex-1 h-px bg-gray-200" />
-            </div>
-            <button
-              onClick={handleOffline}
-              disabled={signingIn || offlineLoading}
-              className="w-full flex items-center gap-2.5 px-4 py-3 border border-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-50 transition-colors"
-            >
-              {storedUser.image ? (
-                <img src={storedUser.image} alt="" className="w-6 h-6 rounded-full shrink-0" />
-              ) : (
-                <div className="w-6 h-6 rounded-full bg-gray-300 flex items-center justify-center text-xs font-bold text-gray-600 shrink-0">
-                  {storedUser.name.slice(0, 2).toUpperCase()}
-                </div>
-              )}
-              <span className="flex-1 text-left">
-                {offlineLoading ? 'Signing in…' : (
-                  <>Continue as <strong>{storedUser.name}</strong></>
-                )}
-              </span>
-              <span className="text-xs text-gray-400 shrink-0">offline</span>
-            </button>
-          </>
-        )}
       </div>
     </div>
   );

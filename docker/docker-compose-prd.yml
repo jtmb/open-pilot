@@ -1,0 +1,39 @@
+# Production overlay — Cloudflare Tunnel
+#
+# Adds a cloudflared sidecar that creates a secure public HTTPS tunnel to the
+# web container without opening any firewall ports.
+#
+# Prerequisites
+# ─────────────
+# 1. Go to https://one.dash.cloudflare.com → Networks → Tunnels → Create a tunnel
+# 2. Choose "Cloudflared" as connector type and give the tunnel a name.
+# 3. Under Public Hostnames, add a route:
+#       Subdomain / Domain of your choice  →  http://web:3000
+# 4. Copy the tunnel token shown in the dashboard.
+# 5. Create docker/.env.prd (see docker/.env.prd.example) and paste the token.
+# 6. Update NEXTAUTH_URL in your .env to match the public hostname, e.g.:
+#       NEXTAUTH_URL=https://your-tunnel-domain.com
+#
+# Usage
+# ─────
+#   docker compose -f docker-compose.yml -f docker-compose-prd.yml up -d --build
+#
+# To stop:
+#   docker compose -f docker-compose.yml -f docker-compose-prd.yml down
+
+services:
+  web:
+    # In production the web container does not need to expose port 3000 to the
+    # host — all public traffic arrives through the Cloudflare Tunnel.
+    ports: !reset []
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    env_file:
+      - .env.prd
+    depends_on:
+      - web

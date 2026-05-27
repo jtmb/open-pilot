@@ -1,39 +1,38 @@
 'use client';
 import { signIn, signOut, useSession } from 'next-auth/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-
-interface BackupInfo {
-  filename: string;
-  createdAt: number;
-  size: number;
-}
-
-function fmtSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function fmtDate(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
-}
+import BackupPanel from './BackupPanel';
+import NotificationPanel from './NotificationPanel';
 
 export default function ProfileMenu() {
   const { data: session } = useSession();
   const [open, setOpen] = useState(false);
   const [isDark, setIsDark] = useState(false);
+  const [autoBackupEnabled, setAutoBackupEnabled] = useState(true);
+  const [showBackupPanel, setShowBackupPanel] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [showNotificationPanel, setShowNotificationPanel] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-
-  // Backup state
-  const [backups, setBackups] = useState<BackupInfo[]>([]);
-  const [backupLoading, setBackupLoading] = useState(false);
-  const [backupMsg, setBackupMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [showBackups, setShowBackups] = useState(false);
-  const importRef = useRef<HTMLInputElement>(null);
 
   // Sync dark state from DOM on mount
   useEffect(() => {
     setIsDark(document.documentElement.classList.contains('dark'));
+  }, []);
+
+  // Load auto-backup config from server
+  useEffect(() => {
+    fetch('/api/backup/config')
+      .then(r => r.json())
+      .then((d: { enabled?: boolean }) => { if (d.enabled !== undefined) setAutoBackupEnabled(d.enabled); })
+      .catch(() => {});
+  }, []);
+
+  // Load notification config from server
+  useEffect(() => {
+    fetch('/api/notifications/config')
+      .then(r => r.json())
+      .then((d: { enabled?: boolean }) => { if (d.enabled !== undefined) setNotificationsEnabled(d.enabled); })
+      .catch(() => {});
   }, []);
 
   const toggleDark = () => {
@@ -48,6 +47,30 @@ export default function ProfileMenu() {
     }
   };
 
+  const toggleAutoBackup = useCallback(async () => {
+    const next = !autoBackupEnabled;
+    setAutoBackupEnabled(next);
+    try {
+      await fetch('/api/backup/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: next }),
+      });
+    } catch { /* ignore */ }
+  }, [autoBackupEnabled]);
+
+  const toggleNotifications = useCallback(async () => {
+    const next = !notificationsEnabled;
+    setNotificationsEnabled(next);
+    try {
+      await fetch('/api/notifications/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: next }),
+      });
+    } catch { /* ignore */ }
+  }, [notificationsEnabled]);
+
   // Close dropdown when clicking outside
   useEffect(() => {
     if (!open) return;
@@ -59,87 +82,6 @@ export default function ProfileMenu() {
     document.addEventListener('mousedown', handle);
     return () => document.removeEventListener('mousedown', handle);
   }, [open]);
-
-  const loadBackups = useCallback(async () => {
-    try {
-      const r = await fetch('/api/backup/list');
-      const d = await r.json() as { backups: BackupInfo[] };
-      setBackups(d.backups ?? []);
-    } catch { setBackups([]); }
-  }, []);
-
-  useEffect(() => {
-    if (showBackups) loadBackups();
-  }, [showBackups, loadBackups]);
-
-  const handleExport = useCallback(async () => {
-    setBackupLoading(true);
-    setBackupMsg(null);
-    try {
-      const r = await fetch('/api/backup/export');
-      if (!r.ok) throw new Error('Export failed');
-      const blob = await r.blob();
-      const cd = r.headers.get('Content-Disposition') ?? '';
-      const match = cd.match(/filename="([^"]+)"/);
-      const name = match?.[1] ?? 'openpilot.db';
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = name; a.click();
-      URL.revokeObjectURL(url);
-      setBackupMsg({ ok: true, text: 'Database exported successfully' });
-    } catch (e) {
-      setBackupMsg({ ok: false, text: (e as Error).message });
-    } finally {
-      setBackupLoading(false);
-    }
-  }, []);
-
-  const handleImport = useCallback(async (file: File) => {
-    if (!file.name.endsWith('.db')) {
-      setBackupMsg({ ok: false, text: 'Please select a .db file' });
-      return;
-    }
-    setBackupLoading(true);
-    setBackupMsg(null);
-    try {
-      const form = new FormData();
-      form.append('file', file);
-      const r = await fetch('/api/backup/import', { method: 'POST', body: form });
-      const d = await r.json() as { ok?: boolean; error?: string };
-      if (d.ok) {
-        setBackupMsg({ ok: true, text: 'Database imported — reload to see changes' });
-      } else {
-        setBackupMsg({ ok: false, text: d.error ?? 'Import failed' });
-      }
-    } catch (e) {
-      setBackupMsg({ ok: false, text: (e as Error).message });
-    } finally {
-      setBackupLoading(false);
-    }
-  }, []);
-
-  const handleRestore = useCallback(async (filename: string) => {
-    if (!confirm(`Restore database from "${filename}"? All current data will be replaced.`)) return;
-    setBackupLoading(true);
-    setBackupMsg(null);
-    try {
-      const r = await fetch('/api/backup/restore', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename }),
-      });
-      const d = await r.json() as { ok?: boolean; error?: string };
-      if (d.ok) {
-        setBackupMsg({ ok: true, text: 'Restored successfully — reload to see changes' });
-      } else {
-        setBackupMsg({ ok: false, text: d.error ?? 'Restore failed' });
-      }
-    } catch (e) {
-      setBackupMsg({ ok: false, text: (e as Error).message });
-    } finally {
-      setBackupLoading(false);
-    }
-  }, []);
 
   if (!session?.user) {
     return (
@@ -195,70 +137,53 @@ export default function ProfileMenu() {
 
           {/* Backup section */}
           <div className="px-3 py-1.5">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 mb-1">Database Backup</p>
-
-            {/* Status message */}
-            {backupMsg && (
-              <p className={`text-xs px-1 py-1 mb-1 rounded ${backupMsg.ok ? 'text-green-400' : 'text-red-400'}`}>
-                {backupMsg.text}
-              </p>
-            )}
-
-            {/* Export + Import row */}
-            <div className="flex gap-1.5 mb-1.5">
-              <button
-                onClick={handleExport}
-                disabled={backupLoading}
-                className="flex-1 text-xs py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors disabled:opacity-50"
-              >
-                ⬇ Export
-              </button>
-              <button
-                onClick={() => importRef.current?.click()}
-                disabled={backupLoading}
-                className="flex-1 text-xs py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors disabled:opacity-50"
-              >
-                ⬆ Import
-              </button>
-              <input
-                ref={importRef}
-                type="file"
-                accept=".db"
-                className="hidden"
-                onChange={e => { const f = e.target.files?.[0]; if (f) handleImport(f); e.target.value = ''; }}
-              />
-            </div>
-
-            {/* Auto-backup list toggle */}
+            {/* Automatic Backups toggle */}
             <button
-              onClick={() => setShowBackups(p => !p)}
-              className="w-full text-left text-xs text-gray-400 hover:text-gray-200 flex items-center justify-between px-1 py-1 rounded hover:bg-gray-700 transition-colors"
+              onClick={toggleAutoBackup}
+              className="w-full flex items-center justify-between px-1 py-1.5 rounded hover:bg-gray-700 transition-colors"
             >
-              <span>Auto-backups</span>
-              <span className="text-gray-500">{showBackups ? '▲' : '▼'}</span>
+              <span className="flex items-center gap-2 text-sm text-gray-300">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 3 8 3s8-.79 8-3V7M4 7c0 2.21 3.582 3 8 3s8-.79 8-3M4 7c0-2.21 3.582-3 8-3s8 .79 8 3" />
+                </svg>
+                Automatic Backups
+              </span>
+              <span className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${autoBackupEnabled ? 'bg-blue-600' : 'bg-gray-600'}`}>
+                <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${autoBackupEnabled ? 'translate-x-4' : 'translate-x-1'}`} />
+              </span>
             </button>
+            <button
+              onClick={() => { setOpen(false); setShowBackupPanel(true); }}
+              className="w-full text-left px-1 py-0.5 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+            >
+              Configure Backups →
+            </button>
+          </div>
 
-            {showBackups && (
-              <div className="mt-1 space-y-1 max-h-48 overflow-y-auto">
-                {backups.length === 0 ? (
-                  <p className="text-xs text-gray-500 px-1 py-1">No auto-backups yet (first runs 30s after startup)</p>
-                ) : backups.map(b => (
-                  <div key={b.filename} className="flex items-center justify-between gap-1 px-1 py-1 rounded hover:bg-gray-700">
-                    <div className="min-w-0">
-                      <div className="text-xs text-gray-300 truncate">{fmtDate(b.createdAt)}</div>
-                      <div className="text-[10px] text-gray-500">{fmtSize(b.size)}</div>
-                    </div>
-                    <button
-                      onClick={() => handleRestore(b.filename)}
-                      disabled={backupLoading}
-                      className="shrink-0 text-[10px] px-2 py-0.5 rounded bg-gray-600 hover:bg-gray-500 text-gray-200 transition-colors disabled:opacity-50"
-                    >
-                      Restore
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+          <div className="border-t border-gray-700 mt-0.5" />
+
+          {/* Notifications section */}
+          <div className="px-3 py-1.5">
+            <button
+              onClick={toggleNotifications}
+              className="w-full flex items-center justify-between px-1 py-1.5 rounded hover:bg-gray-700 transition-colors"
+            >
+              <span className="flex items-center gap-2 text-sm text-gray-300">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                </svg>
+                Notifications
+              </span>
+              <span className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${notificationsEnabled ? 'bg-blue-600' : 'bg-gray-600'}`}>
+                <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${notificationsEnabled ? 'translate-x-4' : 'translate-x-1'}`} />
+              </span>
+            </button>
+            <button
+              onClick={() => { setOpen(false); setShowNotificationPanel(true); }}
+              className="w-full text-left px-1 py-0.5 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+            >
+              Configure Notifications →
+            </button>
           </div>
 
           <div className="border-t border-gray-700 mt-0.5" />
@@ -303,6 +228,11 @@ export default function ProfileMenu() {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
       </button>
+
+      {/* Backup configuration modal */}
+      {showBackupPanel && <BackupPanel onClose={() => setShowBackupPanel(false)} />}
+      {/* Notification configuration modal */}
+      {showNotificationPanel && <NotificationPanel onClose={() => setShowNotificationPanel(false)} />}
     </div>
   );
 }

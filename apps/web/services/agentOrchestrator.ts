@@ -4,13 +4,15 @@
 
 import personalitiesData from '../data/personalities.json';
 
-export type PersonalityId = 'developer' | 'designer' | 'writer';
+export type PersonalityId = 'developer' | 'designer' | 'writer' | 'gamedev' | 'secops';
 
 export interface PersonalityDef {
   id: PersonalityId;
   label: string;
   icon: string;
   description: string;
+  titlePlaceholder: string;
+  specPlaceholder: string;
   workerSystem: string;
   managerSystem: string;
 }
@@ -80,6 +82,10 @@ export interface AgentRunConfig {
   githubRepo?: string;
   /** Agent personality category */
   category?: PersonalityId;
+  /** Git URL of an existing repo to clone as the workspace instead of starting fresh */
+  existingRepo?: string;
+  /** Feature branch to create and publish when continuing from an existing repo */
+  featureBranch?: string;
 }
 
 /** A snapshot of the workspace at a point in time, backed by a git commit. */

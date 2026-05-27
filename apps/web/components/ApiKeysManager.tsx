@@ -53,6 +53,7 @@ export default function ApiKeysManager() {
   const [revealedKey, setRevealedKey] = useState<{ id: string; raw: string } | null>(null);
   // Persists the last revealed raw key for the curl snippet (cleared only on unmount/navigate away)
   const [lastRawKey, setLastRawKey] = useState<string | null>(null);
+  const [lastKeyId, setLastKeyId] = useState<string | null>(null);
 
   const fetchKeys = useCallback(async () => {
     try {
@@ -97,6 +98,7 @@ export default function ApiKeysManager() {
       setKeys(prev => [d.key!, ...prev]);
       setRevealedKey({ id: d.key!.id, raw: d.rawKey! });
       setLastRawKey(d.rawKey!);
+      setLastKeyId(d.key!.id);
       setNewName('');
       setShowForm(false);
     } catch (e) {
@@ -132,6 +134,7 @@ export default function ApiKeysManager() {
       setKeys(prev => prev.map(k => k.id === key.id ? { ...k, keyPrefix: d.key!.keyPrefix } : k));
       setRevealedKey({ id: key.id, raw: d.rawKey! });
       setLastRawKey(d.rawKey!);
+      setLastKeyId(key.id);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -317,40 +320,40 @@ export default function ApiKeysManager() {
       )}
 
       {/* Usage snippet */}
-      {keys.length > 0 && (
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5 space-y-2">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Quick Usage</h3>
-            {lastRawKey && (
-              <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500" />
-                Using last created key
-              </span>
-            )}
-          </div>
-          <div className="relative group">
-            <pre className="bg-gray-900 text-green-300 rounded-lg p-4 text-xs font-mono overflow-x-auto whitespace-pre pr-16">
-{`curl http://localhost:3000/v1/chat/completions \\
-  -H "Authorization: Bearer ${lastRawKey ?? (keys[0]?.keyPrefix ? keys[0].keyPrefix + '…' : '<your-key>')}" \\
+      {keys.length > 0 && (() => {
+        const snippetKey = lastKeyId ? keys.find(k => k.id === lastKeyId) : keys[0];
+        const snippetModel = snippetKey?.model ?? 'gpt-4o';
+        const snippetAuth = lastRawKey ?? (keys[0]?.keyPrefix ? keys[0].keyPrefix + '…' : '<your-key>');
+        const curlCmd = `curl http://localhost:3000/v1/chat/completions \\
+  -H "Authorization: Bearer ${snippetAuth}" \\
   -H "Content-Type: application/json" \\
-  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Hello!"}]}'`}
-            </pre>
-            <div className="absolute top-3 right-3">
-              <CopyButton
-                text={`curl http://localhost:3000/v1/chat/completions \\
-  -H "Authorization: Bearer ${lastRawKey ?? (keys[0]?.keyPrefix ? keys[0].keyPrefix + '…' : '<your-key>')}" \\
-  -H "Content-Type: application/json" \\
-  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Hello!"}]}'`}
-                dark
-              />
+  -d '{"model":"${snippetModel}","messages":[{"role":"user","content":"Hello!"}]}'`;
+        return (
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5 space-y-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Quick Usage</h3>
+              {lastRawKey && (
+                <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500" />
+                  Using last created key
+                </span>
+              )}
             </div>
+            <div className="relative group">
+              <pre className="bg-gray-900 text-green-300 rounded-lg p-4 text-xs font-mono overflow-x-auto whitespace-pre pr-16">
+{curlCmd}
+              </pre>
+              <div className="absolute top-3 right-3">
+                <CopyButton text={curlCmd} dark />
+              </div>
+            </div>
+            <p className="text-xs text-gray-400 dark:text-gray-500">
+              Compatible with any OpenAI SDK. Set <code className="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">base_url</code> to <code className="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">http://localhost:3000/v1</code>.
+              See the <span className="text-blue-500">Docs → API Usage</span> tab for examples.
+            </p>
           </div>
-          <p className="text-xs text-gray-400 dark:text-gray-500">
-            Compatible with any OpenAI SDK. Set <code className="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">base_url</code> to <code className="text-xs bg-gray-100 dark:bg-gray-700 px-1 rounded">http://localhost:3000/v1</code>.
-            See the <span className="text-blue-500">Docs → API Usage</span> tab for examples.
-          </p>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
