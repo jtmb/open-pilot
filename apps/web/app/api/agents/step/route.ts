@@ -52,10 +52,13 @@ export async function POST(req: NextRequest) {
 
     const data = await res.json() as {
       choices: Array<{ message: { content: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
     const reply = data.choices?.[0]?.message?.content ?? '';
+    const promptTokens     = data.usage?.prompt_tokens     ?? 0;
+    const completionTokens = data.usage?.completion_tokens ?? 0;
 
-    return NextResponse.json({ reply });
+    return NextResponse.json({ reply, promptTokens, completionTokens });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }

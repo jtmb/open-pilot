@@ -96,7 +96,7 @@ export default function BackupPanel({ onClose }: Props) {
       const blob = await r.blob();
       const cd = r.headers.get('Content-Disposition') ?? '';
       const match = cd.match(/filename="([^"]+)"/);
-      const name = match?.[1] ?? 'openpilot.db';
+      const name = match?.[1] ?? 'openpilot.json';
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -115,7 +115,7 @@ export default function BackupPanel({ onClose }: Props) {
   };
 
   const handleImport = async (file: File) => {
-    if (!file.name.endsWith('.db')) { showMsg(false, 'Please select a .db file'); return; }
+    if (!file.name.endsWith('.json')) { showMsg(false, 'Please select a .json backup file'); return; }
     if (!confirm('Replace the current database with the imported file? This cannot be undone.')) return;
     setActionLoading(true);
     try {
@@ -263,19 +263,19 @@ export default function BackupPanel({ onClose }: Props) {
                 disabled={actionLoading}
                 className="flex-1 text-sm py-2 rounded-lg bg-gray-900 dark:bg-gray-700 text-white hover:bg-gray-800 dark:hover:bg-gray-600 disabled:opacity-50 transition-colors"
               >
-                ⬇ Export .db
+                ⬇ Export .json
               </button>
               <button
                 onClick={() => importRef.current?.click()}
                 disabled={actionLoading}
                 className="flex-1 text-sm py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50 transition-colors"
               >
-                ⬆ Import .db
+                ⬆ Import .json
               </button>
               <input
                 ref={importRef}
                 type="file"
-                accept=".db"
+                accept=".json"
                 className="hidden"
                 onChange={e => { const f = e.target.files?.[0]; if (f) handleImport(f); e.target.value = ''; }}
               />

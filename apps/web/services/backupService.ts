@@ -1,13 +1,42 @@
-// services/backupService.ts
-// SQLite auto-backup: periodic copies of the database file, kept at /data/backups/
-
 import fs from 'fs';
 import path from 'path';
+import { prisma } from '@/lib/prisma';
 
-const DB_PATH = process.env.DATABASE_URL?.replace(/^file:/, '') ?? '/data/openpilot.db';
-const BACKUP_DIR = path.join(path.dirname(DB_PATH), 'backups');
-const CONFIG_PATH = path.join(path.dirname(DB_PATH), 'backup-config.json');
+const BACKUP_DIR = process.env.BACKUP_DIR ?? '/data/backups';
+const CONFIG_PATH = process.env.BACKUP_CONFIG_PATH ?? '/data/backup-config.json';
 const MAX_BACKUPS = 10;
+
+interface BackupPayload {
+  version: 1;
+  exportedAt: number;
+  datasource: string;
+  conversations: Array<{
+    id: string;
+    title: string;
+    createdAt: number;
+    updatedAt: number;
+    messages: string;
+  }>;
+  users: Array<{
+    id: string;
+    name: string;
+    email: string;
+    image: string | null;
+    createdAt: number;
+    updatedAt: number;
+  }>;
+  apiKeys: Array<{
+    id: string;
+    name: string;
+    keyHash: string;
+    keyPrefix: string;
+    model: string;
+    enabled: boolean;
+    createdAt: number;
+    lastUsedAt: number | null;
+    usageCount: number;
+  }>;
+}
 
 // ── Backup config ─────────────────────────────────────────────────────────────
 
@@ -45,26 +74,65 @@ function ensureBackupDir() {
   if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
 }
 
-/** Copy the live database to a timestamped backup file. */
-export function backupDatabase(): BackupInfo {
+function safeNumber(value: bigint | number | null): number {
+  if (value == null) return 0;
+  return typeof value === 'bigint' ? Number(value) : value;
+}
+
+async function buildBackupPayload(): Promise<BackupPayload> {
+  const [conversations, users, apiKeys] = await Promise.all([
+    prisma.conversation.findMany(),
+    prisma.user.findMany(),
+    prisma.apiKey.findMany(),
+  ]);
+
+  return {
+    version: 1,
+    exportedAt: Date.now(),
+    datasource: process.env.DATABASE_URL?.split(':')[0] ?? 'unknown',
+    conversations: conversations.map((c) => ({
+      id: c.id,
+      title: c.title,
+      createdAt: safeNumber(c.createdAt),
+      updatedAt: safeNumber(c.updatedAt),
+      messages: c.messages,
+    })),
+    users: users.map((u) => ({
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      image: u.image,
+      createdAt: safeNumber(u.createdAt),
+      updatedAt: safeNumber(u.updatedAt),
+    })),
+    apiKeys: apiKeys.map((k) => ({
+      id: k.id,
+      name: k.name,
+      keyHash: k.keyHash,
+      keyPrefix: k.keyPrefix,
+      model: k.model,
+      enabled: k.enabled,
+      createdAt: safeNumber(k.createdAt),
+      lastUsedAt: k.lastUsedAt == null ? null : safeNumber(k.lastUsedAt),
+      usageCount: k.usageCount,
+    })),
+  };
+}
+
+/** Create and store a timestamped logical backup as JSON. */
+export async function backupDatabase(): Promise<BackupInfo> {
   ensureBackupDir();
 
-  if (!fs.existsSync(DB_PATH)) {
-    throw new Error(`Database file not found at ${DB_PATH}`);
-  }
-
-  const ts = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
-  const filename = `openpilot_${ts}.db`;
+  const payload = await buildBackupPayload();
+  const ts = new Date(payload.exportedAt).toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+  const filename = `openpilot_${ts}.json`;
   const dest = path.join(BACKUP_DIR, filename);
 
-  fs.copyFileSync(DB_PATH, dest);
+  fs.writeFileSync(dest, JSON.stringify(payload), 'utf8');
 
   const stat = fs.statSync(dest);
   const info: BackupInfo = { filename, createdAt: stat.ctimeMs, size: stat.size };
-
-  // Prune oldest backups, keeping only MAX_BACKUPS
   pruneOldBackups();
-
   return info;
 }
 
@@ -74,7 +142,7 @@ export function listBackups(): BackupInfo[] {
   try {
     return fs
       .readdirSync(BACKUP_DIR)
-      .filter(f => f.endsWith('.db'))
+      .filter(f => f.endsWith('.json'))
       .map(filename => {
         const stat = fs.statSync(path.join(BACKUP_DIR, filename));
         return { filename, createdAt: stat.ctimeMs, size: stat.size };
@@ -91,47 +159,99 @@ export function getBackupPath(filename: string): string {
   if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
     throw new Error('Invalid backup filename');
   }
-  if (!filename.endsWith('.db')) {
+  if (!filename.endsWith('.json')) {
     throw new Error('Invalid backup file extension');
   }
   return path.join(BACKUP_DIR, filename);
 }
 
-/** Replace the live database with a backup file, then reconnect Prisma. */
+async function applyBackupPayload(payload: BackupPayload): Promise<void> {
+  if (!Array.isArray(payload.conversations) || !Array.isArray(payload.users) || !Array.isArray(payload.apiKeys)) {
+    throw new Error('Invalid backup payload');
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.conversation.deleteMany();
+    await tx.user.deleteMany();
+    await tx.apiKey.deleteMany();
+
+    if (payload.conversations.length > 0) {
+      await tx.conversation.createMany({
+        data: payload.conversations.map((c) => ({
+          id: c.id,
+          title: c.title,
+          createdAt: BigInt(c.createdAt),
+          updatedAt: BigInt(c.updatedAt),
+          messages: c.messages,
+        })),
+      });
+    }
+
+    if (payload.users.length > 0) {
+      await tx.user.createMany({
+        data: payload.users.map((u) => ({
+          id: u.id,
+          name: u.name,
+          email: u.email,
+          image: u.image,
+          createdAt: BigInt(u.createdAt),
+          updatedAt: BigInt(u.updatedAt),
+        })),
+      });
+    }
+
+    if (payload.apiKeys.length > 0) {
+      await tx.apiKey.createMany({
+        data: payload.apiKeys.map((k) => ({
+          id: k.id,
+          name: k.name,
+          keyHash: k.keyHash,
+          keyPrefix: k.keyPrefix,
+          model: k.model,
+          enabled: k.enabled,
+          createdAt: BigInt(k.createdAt),
+          lastUsedAt: k.lastUsedAt == null ? null : BigInt(k.lastUsedAt),
+          usageCount: k.usageCount,
+        })),
+      });
+    }
+  });
+}
+
+/** Restore DB content from a named JSON backup. */
 export async function restoreBackup(filename: string): Promise<void> {
   const src = getBackupPath(filename);
   if (!fs.existsSync(src)) throw new Error('Backup file not found');
 
-  const { prisma } = await import('../lib/prisma');
-  await prisma.$disconnect();
-
-  fs.copyFileSync(src, DB_PATH);
-
-  await prisma.$connect();
+  const raw = fs.readFileSync(src, 'utf8');
+  const parsed = JSON.parse(raw) as BackupPayload;
+  await applyBackupPayload(parsed);
 }
 
-/** Import an externally-supplied .db file as the live database. */
+/** Export current DB content as a downloadable JSON payload. */
+export async function exportDatabase(): Promise<{ filename: string; buffer: Buffer }> {
+  const payload = await buildBackupPayload();
+  const ts = new Date(payload.exportedAt).toISOString().slice(0, 19).replace(/[T:]/g, '-');
+  const filename = `openpilot_${ts}.json`;
+  return {
+    filename,
+    buffer: Buffer.from(JSON.stringify(payload), 'utf8'),
+  };
+}
+
+/** Import an externally-supplied JSON backup payload. */
 export async function importDatabase(buffer: Buffer): Promise<void> {
-  if (!DB_PATH) throw new Error('DATABASE_URL not set');
-
-  const SQLITE_MAGIC = Buffer.from('SQLite format 3\0');
-  if (!buffer.slice(0, 16).equals(SQLITE_MAGIC)) {
-    throw new Error('File does not appear to be a valid SQLite database');
-  }
-
-  const { prisma } = await import('../lib/prisma');
-  await prisma.$disconnect();
-
-  fs.writeFileSync(DB_PATH, buffer);
-
-  await prisma.$connect();
+  const raw = buffer.toString('utf8').trim();
+  if (!raw) throw new Error('Uploaded backup is empty');
+  const parsed = JSON.parse(raw) as BackupPayload;
+  await applyBackupPayload(parsed);
 }
 
 function pruneOldBackups() {
   try {
     const files = fs
       .readdirSync(BACKUP_DIR)
-      .filter(f => f.endsWith('.db'))
+      .filter(f => f.endsWith('.json'))
       .map(f => ({ f, mtime: fs.statSync(path.join(BACKUP_DIR, f)).mtimeMs }))
       .sort((a, b) => b.mtime - a.mtime);
 
@@ -147,10 +267,11 @@ let _autoBackupStarted = false;
 let _timer: ReturnType<typeof setInterval> | null = null;
 
 function _run() {
-  try {
-    const cfg = getAutoBackupConfig();
-    if (cfg.enabled) backupDatabase();
-  } catch { /* ignore transient errors */ }
+  const cfg = getAutoBackupConfig();
+  if (!cfg.enabled) return;
+  void backupDatabase().catch(() => {
+    // Ignore transient backup errors to keep timer alive.
+  });
 }
 
 function _restartTimer(cfg: BackupConfig) {

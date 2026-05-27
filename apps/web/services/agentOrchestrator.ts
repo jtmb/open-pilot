@@ -4,7 +4,7 @@
 
 import personalitiesData from '../data/personalities.json';
 
-export type PersonalityId = 'developer' | 'designer' | 'writer' | 'gamedev' | 'secops';
+export type PersonalityId = 'developer' | 'designer' | 'writer' | 'gamedev' | 'secops' | 'devops' | 'qa' | 'datascientist';
 
 export interface PersonalityDef {
   id: PersonalityId;

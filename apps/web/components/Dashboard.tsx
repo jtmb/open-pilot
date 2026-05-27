@@ -315,6 +315,134 @@ export default function Dashboard({ agentRuns, conversations, onSelectRun, onSel
           </p>
         </Card>
       )}
+
+      {/* ── Agent Training ──────────────────────────────────────────────────── */}
+      <TrainingPanel />
     </div>
+  );
+}
+
+// ── Training panel ─────────────────────────────────────────────────────────────
+
+interface TrainingStat {
+  personalityId: string;
+  total: number;
+  complete: number;
+  blocked: number;
+  completionRate: number;
+  thumbsUp: number;
+  thumbsDown: number;
+  avgCorrections: string;
+}
+
+const PERSONALITIES = [
+  { id: 'developer',     icon: '⚙️',  label: 'Developer'      },
+  { id: 'designer',      icon: '🎨',  label: 'Designer'       },
+  { id: 'gamedev',       icon: '🎮',  label: 'Game Dev'       },
+  { id: 'writer',        icon: '✍️',  label: 'Writer'         },
+  { id: 'secops',        icon: '🔒',  label: 'SecOps'         },
+  { id: 'devops',        icon: '🚀',  label: 'DevOps'         },
+  { id: 'qa',            icon: '🧪',  label: 'QA Engineer'    },
+  { id: 'datascientist', icon: '📊',  label: 'Data Scientist' },
+];
+
+function TrainingPanel() {
+  const [stats, setStats]       = useState<TrainingStat[]>([]);
+  const [loading, setLoading]   = useState(false);
+  const [refining, setRefining] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    setLoading(true);
+    Promise.all(
+      PERSONALITIES.map(p =>
+        fetch(`/api/training/score?personalityId=${p.id}`)
+          .then(r => r.json() as Promise<TrainingStat>)
+          .catch(() => null),
+      ),
+    ).then(results => {
+      setStats(results.filter((r): r is TrainingStat => r !== null));
+      setLoading(false);
+    });
+  }, []);
+
+  const handleRefine = async (personalityId: string) => {
+    setRefining(personalityId);
+    setMessages(m => ({ ...m, [personalityId]: '' }));
+    try {
+      const res = await fetch(`/api/training/refine/${personalityId}`, { method: 'POST' });
+      const data = await res.json() as { ok: boolean; reason?: string; version?: number; changesSummary?: string };
+      if (data.ok) {
+        setMessages(m => ({ ...m, [personalityId]: `✅ v${data.version} created. ${data.changesSummary ?? ''}` }));
+      } else {
+        setMessages(m => ({ ...m, [personalityId]: `ℹ️ ${data.reason ?? 'Could not refine'}` }));
+      }
+    } catch (e) {
+      setMessages(m => ({ ...m, [personalityId]: `❌ Error: ${(e as Error).message}` }));
+    } finally {
+      setRefining(null);
+    }
+  };
+
+  return (
+    <Card title="Agent Training">
+      {loading ? (
+        <p className="text-xs text-gray-400">Loading training stats…</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-gray-400 dark:text-gray-500 border-b dark:border-gray-700">
+                <th className="text-left pb-2 font-semibold">Personality</th>
+                <th className="text-right pb-2 font-semibold">Runs</th>
+                <th className="text-right pb-2 font-semibold">Complete%</th>
+                <th className="text-right pb-2 font-semibold">Avg Corrections</th>
+                <th className="text-right pb-2 font-semibold">👍 / 👎</th>
+                <th className="text-right pb-2 font-semibold">Refine</th>
+              </tr>
+            </thead>
+            <tbody>
+              {PERSONALITIES.map(p => {
+                const s = stats.find(st => st.personalityId === p.id);
+                const msg = messages[p.id];
+                return [
+                  <tr key={p.id} className="border-b last:border-0 dark:border-gray-700/50">
+                    <td className="py-2 font-medium text-gray-700 dark:text-gray-200">
+                      {p.icon} {p.label}
+                    </td>
+                    <td className="py-2 text-right text-gray-600 dark:text-gray-400">{s?.total ?? 0}</td>
+                    <td className="py-2 text-right text-gray-600 dark:text-gray-400">
+                      {s ? `${(s.completionRate * 100).toFixed(0)}%` : '—'}
+                    </td>
+                    <td className="py-2 text-right text-gray-600 dark:text-gray-400">{s?.avgCorrections ?? '—'}</td>
+                    <td className="py-2 text-right text-gray-600 dark:text-gray-400">
+                      {s ? `${s.thumbsUp} / ${s.thumbsDown}` : '—'}
+                    </td>
+                    <td className="py-2 text-right">
+                      <button
+                        onClick={() => void handleRefine(p.id)}
+                        disabled={refining === p.id || (s?.total ?? 0) < 20}
+                        title={(s?.total ?? 0) < 20 ? 'Need 20+ scored runs to refine' : `Refine ${p.label} prompts`}
+                        className="px-2 py-0.5 rounded text-xs font-semibold bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 hover:bg-indigo-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {refining === p.id ? '…' : '✨ Refine'}
+                      </button>
+                    </td>
+                  </tr>,
+                  msg ? (
+                    <tr key={`${p.id}-msg`}>
+                      <td colSpan={6} className="pb-2 text-xs text-gray-500 dark:text-gray-400 italic">{msg}</td>
+                    </tr>
+                  ) : null,
+                ];
+              })}
+            </tbody>
+          </table>
+          <p className="text-xs text-gray-400 mt-3">
+            ✨ Refine analyses successful and poor runs, then asks Copilot to improve the personality's system prompts. Requires 20+ scored runs per personality.
+          </p>
+        </div>
+      )}
+    </Card>
   );
 }

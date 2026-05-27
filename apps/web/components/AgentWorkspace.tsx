@@ -185,6 +185,11 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
   const [showPushModal, setShowPushModal] = useState(false);
   const [pushState, setPushState] = useState<{ status: 'idle' | 'pushing' | 'success' | 'error'; url?: string; message?: string }>({ status: 'idle' });
 
+  // Training: accumulated token counts and run-persist state
+  const tokenAccumRef = useRef({ prompt: 0, completion: 0 });
+  const [savedRunId, setSavedRunId]   = useState<string | null>(null);
+  const [userRating,  setUserRating]  = useState<1 | -1 | null>(null);
+
   const { data: session } = useSession();
 
   // Refs to access latest values inside async loops without stale closures
@@ -274,6 +279,40 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run.status]);
+
+  // ── Persist run to DB on terminal state ──────────────────────────────────
+  const persistKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const TERMINAL = new Set(['complete', 'error']);
+    if (!TERMINAL.has(run.status)) return;
+    const key = `${run.id}:${run.status}`;
+    if (persistKeyRef.current === key) return;
+    persistKeyRef.current = key;
+    fetch('/api/runs/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        run,
+        tokenPromptTotal:     tokenAccumRef.current.prompt,
+        tokenCompletionTotal: tokenAccumRef.current.completion,
+        monitorFindings:      JSON.stringify(allFindings),
+      }),
+    })
+      .then(r => r.json() as Promise<{ ok: boolean; id?: string }>)
+      .then(d => { if (d.ok && d.id) setSavedRunId(d.id); })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run.status]);
+
+  const handleRate = useCallback((rating: 1 | -1) => {
+    if (!savedRunId || userRating !== null) return;
+    setUserRating(rating);
+    fetch(`/api/runs/${savedRunId}/rate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rating }),
+    }).catch(() => {});
+  }, [savedRunId, userRating]);
 
   // ── Monitor helpers ──────────────────────────────────────────────────────
 
@@ -374,7 +413,9 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
       }),
     });
 
-    const data = await res.json() as { reply?: string; error?: string };
+    const data = await res.json() as { reply?: string; error?: string; promptTokens?: number; completionTokens?: number };
+    tokenAccumRef.current.prompt     += data.promptTokens     ?? 0;
+    tokenAccumRef.current.completion += data.completionTokens ?? 0;
     const reply = data.reply ?? `[API Error: ${data.error ?? 'unknown'}]`;
 
     // ── Manager step: just apply reply ──────────────────────────────────────
@@ -928,7 +969,9 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
           reasoningEffort: reasoningEffort || undefined,
         }),
       });
-      const data = await res.json() as { reply?: string; error?: string };
+      const data = await res.json() as { reply?: string; error?: string; promptTokens?: number; completionTokens?: number };
+      tokenAccumRef.current.prompt     += data.promptTokens     ?? 0;
+      tokenAccumRef.current.completion += data.completionTokens ?? 0;
       const reply = data.reply ?? `[Error: ${data.error}]`;
 
       const replyLog = logEntry(isWorker ? 'worker' : 'manager', isWorker ? 'output' : 'review', reply, injectTarget);
@@ -969,6 +1012,28 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
             <span className="ml-1 inline-block w-1.5 h-1.5 rounded-full bg-green-500 animate-ping" />
           )}
         </span>
+
+        {savedRunId && (run.status === 'complete' || run.status === 'error') && (
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-gray-400">Rate:</span>
+            <button
+              onClick={() => handleRate(1)}
+              disabled={userRating !== null}
+              title="Thumbs up — this run went well"
+              className={`text-base leading-none px-1 rounded transition-opacity ${
+                userRating === 1 ? 'opacity-100' : 'opacity-40 hover:opacity-100 disabled:opacity-40'
+              }`}
+            >👍</button>
+            <button
+              onClick={() => handleRate(-1)}
+              disabled={userRating !== null}
+              title="Thumbs down — this run had problems"
+              className={`text-base leading-none px-1 rounded transition-opacity ${
+                userRating === -1 ? 'opacity-100' : 'opacity-40 hover:opacity-100 disabled:opacity-40'
+              }`}
+            >👎</button>
+          </div>
+        )}
 
         <span className="text-xs text-gray-400">
           {run.currentIteration}/{run.config.maxIterations === 0 ? '∞' : run.config.maxIterations} steps

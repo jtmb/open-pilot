@@ -1,5 +1,5 @@
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -35,4 +35,53 @@ model ApiKey {
   createdAt  BigInt
   lastUsedAt BigInt?
   usageCount Int     @default(0)
+}
+
+// ─── Self-Training Models ────────────────────────────────────────────────────
+
+model AgentRunRecord {
+  id                   String         @id @default(uuid())
+  personalityId        String
+  personalityVersionId String?
+  title                String
+  spec                 String
+  status               String         // 'complete' | 'blocked' | 'error'
+  iterationCount       Int
+  correctionCount      Int            @default(0)
+  tokenPromptTotal     Int            @default(0)
+  tokenCompletionTotal Int            @default(0)
+  userRating           Int?           // 1=thumbs-up, -1=thumbs-down
+  monitorFindings      String         @default("[]")
+  summary              String?
+  workerHistory        String         // JSON
+  managerHistory       String         // JSON
+  createdAt            BigInt
+  completedAt          BigInt?
+  steps                AgentRunStep[]
+  version              PersonalityVersion? @relation(fields: [personalityVersionId], references: [id])
+}
+
+model AgentRunStep {
+  id               String         @id @default(uuid())
+  runId            String
+  run              AgentRunRecord @relation(fields: [runId], references: [id], onDelete: Cascade)
+  stepIndex        Int
+  role             String         // 'worker' | 'manager'
+  promptTokens     Int
+  completionTokens Int
+  createdAt        BigInt
+}
+
+model PersonalityVersion {
+  id            String           @id @default(uuid())
+  personalityId String
+  version       Int
+  workerSystem  String
+  managerSystem String
+  isActive      Boolean          @default(false)
+  promotedAt    BigInt?
+  createdAt     BigInt
+  runs          AgentRunRecord[]
+
+  @@unique([personalityId, version])
 }

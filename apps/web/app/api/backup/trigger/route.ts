@@ -4,7 +4,7 @@ import { backupDatabase } from '@/services/backupService';
 
 export async function POST() {
   try {
-    const info = backupDatabase();
+    const info = await backupDatabase();
     return NextResponse.json({ ok: true, backup: info });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
