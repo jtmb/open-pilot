@@ -2,6 +2,29 @@
 // Types, system prompts, token parsing, and state transitions for the
 // Worker ↔ Manager agent orchestration loop.
 
+import personalitiesData from '../data/personalities.json';
+
+export type PersonalityId = 'developer' | 'designer' | 'writer';
+
+export interface PersonalityDef {
+  id: PersonalityId;
+  label: string;
+  icon: string;
+  description: string;
+  workerSystem: string;
+  managerSystem: string;
+}
+
+/** All available agent personalities loaded from data/personalities.json */
+export const personalities = personalitiesData as Record<PersonalityId, PersonalityDef>;
+
+/** Return the worker/manager system prompts for the given category. Defaults to 'developer'. */
+export function getSystemPrompts(category?: string): { worker: string; manager: string } {
+  const id = (category && category in personalities ? category : 'developer') as PersonalityId;
+  const p = personalities[id];
+  return { worker: p.workerSystem, manager: p.managerSystem };
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export type RunStatus = 'idle' | 'running' | 'paused' | 'complete' | 'error';
@@ -24,7 +47,8 @@ export type LogEntryType =
   | 'status'       // system/status message
   | 'user-input'   // user injection
   | 'exec'         // shell command requested by worker
-  | 'exec-result'; // output from a shell command
+  | 'exec-result'  // output from a shell command
+  | 'checkpoint';  // auto-saved workspace checkpoint
 
 export interface AgentMessage {
   role: 'system' | 'user' | 'assistant';
@@ -50,8 +74,26 @@ export interface AgentRunConfig {
   managerReasoningEffort: string;
   maxIterations: number;
   approvalMode: 'approvals' | 'bypass' | 'autopilot';
-  /** Optional shell command to auto-run after each worker [DONE] (e.g. "npm test") */
-  buildCommand?: string;
+  /** Optional GitHub remote URL — if set, the workspace is pushed here on completion */
+  githubRepo?: string;
+  /** Agent personality category */
+  category?: PersonalityId;
+}
+
+/** A snapshot of the workspace at a point in time, backed by a git commit. */
+export interface Checkpoint {
+  id: string;
+  /** Human-friendly name, e.g. "Checkpoint 1" */
+  name: string;
+  /** Raw command label, e.g. "exec: npm install" */
+  label: string;
+  /** Git SHA of the commit in the workspace repo */
+  commitHash: string;
+  createdAt: number;
+  /** Which agent iteration this was taken at */
+  iteration: number;
+  /** ID of the corresponding log entry so the panel can scroll the chat to it */
+  logEntryId: string;
 }
 
 export interface AgentRun {
@@ -71,6 +113,12 @@ export interface AgentRun {
   log: LogEntry[];
   nextStep: NextStep;
   pendingQuestion?: string;
+  /** Serve command declared by the worker via [SERVE: ...] */
+  previewCommand?: string;
+  /** True once any [EXEC: ...] has exited with code 0 — unlocks the preview button */
+  previewUnlocked?: boolean;
+  /** Git-backed workspace snapshots, auto-created after each successful exec */
+  checkpoints?: Checkpoint[];
 }
 
 // ─── System Prompts ──────────────────────────────────────────────────────────
@@ -92,8 +140,13 @@ For each task:
    - Any shell command:     [EXEC: node -e "console.log('hi')"]
    All code files you output are automatically synced to your workspace before each command runs.
    After receiving the command output, fix any errors and run again until it passes.
-6. End your response with [DONE] when you have completed the task (and any build/tests pass).
-7. If you are completely blocked and cannot continue, end with [BLOCKED: reason].
+6. Once the project can be served or previewed, declare the serve command on port 4000 with:
+   [SERVE: <command>]  e.g.  [SERVE: npx serve -p 4000 dist]
+   Always use port 4000. Use whatever server fits the project type.
+   This unlocks a live preview button for the user — include it as soon as the first successful build.
+7. End your response with [DONE] when you have completed the task (and any build/tests pass).
+8. If you are completely blocked and cannot continue, end with [BLOCKED: reason].
+9. The workspace contains AGENTS.md and CLAUDE.md. After completing each significant feature, update the **Architecture**, **Build & Run**, and **Testing** sections of AGENTS.md to reflect the current state of the project.
 
 Write production-quality code. Never truncate or omit code.`;
 
@@ -112,7 +165,8 @@ Rules:
 - Be specific: include all necessary context in [NEXT_TASK] so the worker doesn't need to ask basic questions
 - In [CORRECTION], name the exact file, function, or line that needs changing
 - Do not emit [COMPLETE] until every feature in the spec is implemented and reviewed
-- CRITICAL: Every response you produce MUST end with exactly one of the tokens above. Never write a response that does not end with [NEXT_TASK:...], [CORRECTION:...], [ANSWER:...], or [COMPLETE]. Keep your analysis brief — emit the token as early as possible.`;
+- CRITICAL: Every response you produce MUST end with exactly one of the tokens above. Never write a response that does not end with [NEXT_TASK:...], [CORRECTION:...], [ANSWER:...], or [COMPLETE]. Keep your analysis brief — emit the token as early as possible.
+- The workspace contains AGENTS.md with documentation. When reviewing completed tasks, verify that the worker kept AGENTS.md up to date (architecture, build, testing sections). If not, include updating it in the next [NEXT_TASK] or [CORRECTION].`;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -137,6 +191,7 @@ interface Tokens {
   nextTask?:     string;
   correction?:   string;
   blocked?:      string;
+  serveCommand?: string;
   execCommands:  string[];
   done:          boolean;
   complete:      boolean;
@@ -184,6 +239,7 @@ export function parseTokens(text: string): Tokens {
     nextTask:    grabToken(text, 'NEXT_TASK'),
     correction:  grabToken(text, 'CORRECTION'),
     blocked:     grabToken(text, 'BLOCKED'),
+    serveCommand: grabToken(text, 'SERVE'),
     execCommands,
     done:        /\[DONE\]/.test(text),
     complete:    /\[COMPLETE\]/.test(text),
@@ -216,6 +272,7 @@ export function createAgentRun(
     managerHistory: [{ role: 'user', content: specMsg }],
     log: [logEntry('system', 'status', `Run created: "${title}"`, 'both')],
     nextStep: 'manager-init',
+    checkpoints: [],
   };
 }
 
@@ -232,7 +289,8 @@ export function getStepPayload(run: AgentRun): StepPayload | null {
   if (!run.nextStep) return null;
 
   const isWorker = run.nextStep === 'worker-execute';
-  const systemContent = isWorker ? WORKER_SYSTEM : MANAGER_SYSTEM;
+  const prompts = getSystemPrompts(run.config.category);
+  const systemContent = isWorker ? prompts.worker : prompts.manager;
   const history = isWorker ? run.workerHistory : run.managerHistory;
 
   return {

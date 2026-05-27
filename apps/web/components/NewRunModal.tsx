@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { createAgentRun, type AgentRun, type AgentRunConfig } from '@/services/agentOrchestrator';
+import { createAgentRun, personalities, type AgentRun, type AgentRunConfig, type PersonalityId } from '@/services/agentOrchestrator';
 import { bestFreeModel, multiplierLabel, type CopilotModel } from './ModelSelector';
 
 const RUN_PREFS_KEY = 'openpilot_run_prefs';
@@ -13,7 +13,9 @@ interface SavedRunPrefs {
   fillModel?: string;
   maxIterations?: number;
   approvalMode?: 'approvals' | 'bypass' | 'autopilot';
-  buildCommand?: string;
+  githubRepo?: string;
+  pushToGithub?: boolean;
+  category?: PersonalityId;
 }
 
 interface Props {
@@ -90,7 +92,9 @@ export default function NewRunModal({ onStart, onClose }: Props) {
   const [managerEffort, setManagerEffort] = useState('');
   const [maxIterations, setMaxIterations] = useState(10);
   const [approvalMode, setApprovalMode] = useState<'approvals' | 'bypass' | 'autopilot'>('approvals');
-  const [buildCommand, setBuildCommand] = useState('');
+  const [pushToGithub, setPushToGithub] = useState(false);
+  const [githubRepo, setGithubRepo] = useState('');
+  const [category, setCategory] = useState<PersonalityId>('developer');
   const [specFullscreen, setSpecFullscreen] = useState(false);
 
   // Fill with AI
@@ -131,7 +135,9 @@ export default function NewRunModal({ onStart, onClose }: Props) {
           if (saved.managerEffort !== undefined) setManagerEffort(saved.managerEffort);
           if (saved.maxIterations !== undefined) setMaxIterations(saved.maxIterations);
           if (saved.approvalMode  !== undefined) setApprovalMode(saved.approvalMode);
-          if (saved.buildCommand  !== undefined) setBuildCommand(saved.buildCommand);
+          if (saved.githubRepo    !== undefined) setGithubRepo(saved.githubRepo);
+          if (saved.pushToGithub  !== undefined) setPushToGithub(saved.pushToGithub);
+          if (saved.category      !== undefined) setCategory(saved.category);
         }
       })
       .catch(() => {});
@@ -169,9 +175,10 @@ export default function NewRunModal({ onStart, onClose }: Props) {
       managerReasoningEffort: managerEffort,
       maxIterations,
       approvalMode,
-      buildCommand: buildCommand.trim() || undefined,
+      githubRepo: pushToGithub && githubRepo.trim() ? githubRepo.trim() : undefined,
+      category,
     };
-    savePrefs({ workerModel, workerEffort, managerModel, managerEffort, fillModel, maxIterations, approvalMode, buildCommand: buildCommand.trim() });
+    savePrefs({ workerModel, workerEffort, managerModel, managerEffort, fillModel, maxIterations, approvalMode, githubRepo, pushToGithub, category });
     onStart(createAgentRun(title.trim(), spec.trim(), config));
   };
 
@@ -191,6 +198,31 @@ export default function NewRunModal({ onStart, onClose }: Props) {
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          {/* Category */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">
+              Agent Type
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {(Object.values(personalities) as typeof personalities[keyof typeof personalities][]).map(p => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => { setCategory(p.id as PersonalityId); savePrefs({ category: p.id as PersonalityId }); }}
+                  className={`flex flex-col items-center gap-1 p-3 rounded-lg border-2 text-center transition-colors ${
+                    category === p.id
+                      ? 'border-blue-500 bg-blue-50'
+                      : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                  }`}
+                >
+                  <span className="text-xl">{p.icon}</span>
+                  <span className="text-xs font-semibold text-gray-800">{p.label}</span>
+                  <span className="text-[10px] text-gray-500 leading-tight">{p.description}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Title */}
           <div>
             <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1">
@@ -319,6 +351,40 @@ export default function NewRunModal({ onStart, onClose }: Props) {
             </div>
           </div>
 
+          {/* GitHub push */}
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={pushToGithub}
+                onChange={e => {
+                  setPushToGithub(e.target.checked);
+                  savePrefs({ pushToGithub: e.target.checked });
+                }}
+                className="rounded"
+              />
+              <span className="font-medium">Push to GitHub when complete</span>
+            </label>
+            {pushToGithub && (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">
+                  Remote URL
+                  <span className="ml-1 font-normal text-gray-400">(include token for private repos: https://TOKEN@github.com/user/repo.git)</span>
+                </label>
+                <input
+                  type="text"
+                  className="w-full border rounded px-3 py-2 text-sm font-mono"
+                  placeholder="https://github.com/user/repo.git"
+                  value={githubRepo}
+                  onChange={e => {
+                    setGithubRepo(e.target.value);
+                    savePrefs({ githubRepo: e.target.value });
+                  }}
+                />
+              </div>
+            )}
+          </div>
+
           {/* Approval mode */}
           <div>
             <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1">
@@ -337,24 +403,6 @@ export default function NewRunModal({ onStart, onClose }: Props) {
               <option value="bypass">⏩ Bypass Approvals — skip confirmations</option>
               <option value="autopilot">✈️ Autopilot — run fully autonomously</option>
             </select>
-          </div>
-          {/* Build command */}
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1">
-              Build / Test Command <span className="text-gray-400 font-normal normal-case">(optional)</span>
-            </label>
-            <input
-              className="w-full border rounded px-3 py-2 text-sm font-mono"
-              placeholder="e.g. npm test  or  npm run build"
-              value={buildCommand}
-              onChange={e => {
-                setBuildCommand(e.target.value);
-                savePrefs({ buildCommand: e.target.value });
-              }}
-            />
-            <p className="mt-1 text-xs text-gray-400">
-              Runs automatically after the worker says [DONE]. Worker sees the output and can fix errors before manager review.
-            </p>
           </div>
         </form>
 

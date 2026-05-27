@@ -15,3 +15,12 @@ model Conversation {
   updatedAt BigInt
   messages  String @default("[]")
 }
+
+model User {
+  id        String  @id
+  name      String
+  email     String  @unique
+  image     String?
+  createdAt BigInt
+  updatedAt BigInt
+}

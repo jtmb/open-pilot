@@ -8,10 +8,13 @@ import {
   applyReply,
   getStepPayload,
   logEntry,
+  makeLogId,
   parseTokens,
   type AgentRun,
+  type Checkpoint,
   type RunStatus,
 } from '@/services/agentOrchestrator';
+import CheckpointsPanel from './CheckpointsPanel';
 import type { ParsedFile } from '@/utils/fileParser';
 
 // ─── Format monitor findings into a manager advisory message ──────────────────
@@ -147,11 +150,24 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
   const [injectText, setInjectText] = useState('');
   const [injectLoading, setInjectLoading] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [checkpointsOpen, setCheckpointsOpen] = useState(false);
+  const [hideCheckpointLogs, setHideCheckpointLogs] = useState(true);
+  const [highlightedEntryId, setHighlightedEntryId] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [restartConfirm, setRestartConfirm] = useState(false);
+  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Monitor state
-  const [monitorOpen, setMonitorOpen]           = useState(false);
-  const [monitorAiEnabled, setMonitorAiEnabled] = useState(true);
-  const [allFindings, setAllFindings]           = useState<DisplayFinding[]>([]);
+  const monitorKey = `openpilot:monitor:${initialRun.id}`;
+  const [monitorOpen, setMonitorOpen]           = useState<boolean>(() => {
+    try { return JSON.parse(localStorage.getItem(monitorKey) ?? 'null')?.open ?? false; } catch { return false; }
+  });
+  const [monitorAiEnabled, setMonitorAiEnabled] = useState<boolean>(() => {
+    try { return JSON.parse(localStorage.getItem(monitorKey) ?? 'null')?.aiEnabled ?? true; } catch { return true; }
+  });
+  const [allFindings, setAllFindings]           = useState<DisplayFinding[]>(() => {
+    try { return JSON.parse(localStorage.getItem(monitorKey) ?? 'null')?.findings ?? []; } catch { return []; }
+  });
   const [isAnalyzing, setIsAnalyzing]           = useState(false);
   const [monitorModel, setMonitorModel]         = useState(() =>
     (typeof window !== 'undefined' && localStorage.getItem('openpilot:monitorModel')) || 'gpt-4o'
@@ -163,16 +179,35 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
   // Accumulates findings to inject as advisory into the next manager step
   const pendingAdvisoryRef = useRef<DisplayFinding[]>([]);
 
+  // GitHub push state (transient — not persisted)
+  const [pushState, setPushState] = useState<{ status: 'idle' | 'pushing' | 'success' | 'error'; message?: string }>({ status: 'idle' });
+
   // Refs to access latest values inside async loops without stale closures
   const runRef            = useRef<AgentRun>(run);
   const loopRef           = useRef(false);
-  const buildRetriesRef   = useRef(0);
 
   const setRunAndSync = useCallback((newRun: AgentRun) => {
     runRef.current = newRun;
     setRun(newRun);
     onUpdate(newRun);
   }, [onUpdate]);
+
+  // ── Normalize stale 'running' status left over from a container/page restart ──
+  useEffect(() => {
+    const r = runRef.current;
+    if (r.status === 'running') {
+      setRunAndSync({
+        ...r,
+        status: 'paused',
+        log: [
+          ...r.log,
+          logEntry('system', 'status', '⚠️ Session interrupted — click Resume to continue.', 'both'),
+        ],
+        updatedAt: Date.now(),
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // When monitor models load, pick best free model (unless user already has a saved preference)
   useEffect(() => {
@@ -184,10 +219,31 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
     }
   }, [monitorModels]);
 
+  // Fetch monitor models whenever the panel is open (handles the case where it was open on mount)
+  useEffect(() => {
+    if (!monitorOpen) return;
+    if (modelsFetched.current) return;
+    modelsFetched.current = true;
+    fetch('/api/models')
+      .then(r => r.json())
+      .then((data: { models?: CopilotModel[] }) => {
+        if (data.models?.length) setMonitorModels(data.models);
+      })
+      .catch(() => {});
+  }, [monitorOpen]);
+
   const handleMonitorModelChange = useCallback((id: string) => {
     setMonitorModel(id);
     if (typeof window !== 'undefined') localStorage.setItem('openpilot:monitorModel', id);
   }, []);
+
+  // ── Persist monitor state ────────────────────────────────────────────────
+  useEffect(() => {
+    try {
+      localStorage.setItem(monitorKey, JSON.stringify({ open: monitorOpen, aiEnabled: monitorAiEnabled, findings: allFindings }));
+    } catch { /* quota */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monitorOpen, monitorAiEnabled, allFindings]);
 
   // ── Monitor helpers ──────────────────────────────────────────────────────
 
@@ -260,8 +316,6 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
 
   // ── Core step function ────────────────────────────────────────────────────
 
-  const MAX_BUILD_RETRIES = 3;
-
   const executeOneStep = useCallback(async (currentRun: AgentRun, advisory?: string): Promise<AgentRun | null> => {
     const payload = getStepPayload(currentRun);
     if (!payload) return null;
@@ -304,6 +358,11 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
     // Apply reply first so history/logs are updated
     let updated = applyReply(currentRun, currentRun.nextStep!, reply);
 
+    // Apply [SERVE: command] if declared — stored on the run for persistence
+    if (tokens.serveCommand) {
+      updated = { ...updated, previewCommand: tokens.serveCommand };
+    }
+
     // Extract files from this reply (for syncing to workspace)
     const { extractFilesFromText } = await import('@/utils/fileParser');
     const fileMap = new Map<string, ParsedFile>();
@@ -337,6 +396,47 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
             ? `error: ${execError}`
             : `${output ?? ''}`;
           const exitLabel = execError ? 'error' : `exit ${exitCode}`;
+          const execPassed = !execError && exitCode === 0;
+
+          // Unlock preview + auto-checkpoint when any exec passes
+          if (execPassed) {
+            updated = { ...updated, previewUnlocked: true };
+            // Auto-checkpoint: git commit workspace state (non-fatal)
+            try {
+              const cpLabel = `exec: ${cmd.slice(0, 80)}`;
+              const cpRes = await fetch('/api/exec/checkpoint', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ runId: currentRun.id, label: cpLabel }),
+              });
+              const cpData = (await cpRes.json()) as { commitHash?: string };
+              if (cpData.commitHash) {
+                const cpIndex = (updated.checkpoints ?? []).length + 1;
+                const cpName = `Checkpoint ${cpIndex}`;
+                const cpLogId = makeLogId();
+                const cpLogEntry = {
+                  ...logEntry('system', 'checkpoint', `${cpName} · ${cmd.slice(0, 120)}`, 'both'),
+                  id: cpLogId,
+                };
+                const newCp: Checkpoint = {
+                  id: makeLogId(),
+                  name: cpName,
+                  label: cpLabel,
+                  commitHash: cpData.commitHash,
+                  createdAt: Date.now(),
+                  iteration: currentRun.currentIteration,
+                  logEntryId: cpLogId,
+                };
+                updated = {
+                  ...updated,
+                  checkpoints: [...(updated.checkpoints ?? []), newCp],
+                  log: [...updated.log, cpLogEntry],
+                };
+              }
+            } catch {
+              // Checkpoint failure is non-fatal — never blocks the run
+            }
+          }
 
           updated = {
             ...updated,
@@ -367,73 +467,18 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
         }
         filesForFirstCmd = []; // only sync files on the first exec per reply
       }
-      return updated;
-    }
-
-    // ── Auto-build after [DONE] ──────────────────────────────────────────────
-    if (tokens.done && cfg.buildCommand && buildRetriesRef.current < MAX_BUILD_RETRIES) {
-      // Collect all files from entire worker history for this run
-      const allFileMap = new Map<string, ParsedFile>();
-      for (const msg of updated.workerHistory) {
-        if (msg.role === 'assistant') extractFilesFromText(msg.content, allFileMap);
-      }
-      const allFiles = Array.from(allFileMap.values());
-
-      updated = {
-        ...updated,
-        log: [...updated.log, logEntry('system', 'exec', cfg.buildCommand, 'worker')],
-      };
-
-      try {
-        const buildRes = await fetch('/api/exec', {
+      // Auto-start preview when both the serve command and a passing exec are present
+      if (updated.previewCommand && updated.previewUnlocked && !previewUrl) {
+        fetch('/api/exec/serve', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            command: cfg.buildCommand,
-            runId: currentRun.id,
-            files: allFiles.length > 0 ? allFiles : undefined,
-          }),
-        });
-        const { output, exitCode, error: buildError } =
-          await buildRes.json() as { output?: string; exitCode?: number; error?: string };
-
-        const resultText = buildError ? `error: ${buildError}` : (output ?? '');
-        const exitLabel  = buildError ? 'error' : `exit ${exitCode}`;
-        const passed     = !buildError && exitCode === 0;
-
-        updated = {
-          ...updated,
-          log: [...updated.log, logEntry('system', 'exec-result', `${exitLabel}\n${resultText}`, 'worker')],
-        };
-
-        if (!passed) {
-          buildRetriesRef.current += 1;
-          // Let worker fix the errors
-          updated = {
-            ...updated,
-            workerHistory: [
-              ...updated.workerHistory,
-              {
-                role: 'user' as const,
-                content:
-                  `[BUILD_RESULT: exit_code=${exitCode ?? -1}]\n${resultText}\n\n` +
-                  `Please fix the errors above and end with [DONE] when the build passes.`,
-              },
-            ],
-            nextStep: 'worker-execute',
-            status:   'running',
-          };
-        } else {
-          buildRetriesRef.current = 0;
-          // Build passed — proceed to manager review as normal
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        updated = {
-          ...updated,
-          log: [...updated.log, logEntry('system', 'exec-result', `error\n${msg}`, 'worker')],
-        };
+          body: JSON.stringify({ command: updated.previewCommand, runId: currentRun.id }),
+        })
+          .then(r => r.json() as Promise<{ url?: string }>)
+          .then(d => { if (d.url) setPreviewUrl(d.url); })
+          .catch(() => {});
       }
+      return updated;
     }
 
     return updated;
@@ -528,7 +573,19 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
   // ── Controls ──────────────────────────────────────────────────────────────
 
   const handleStart = useCallback(() => {
-    buildRetriesRef.current = 0;
+    setPreviewUrl(null);
+    // Stop any running preview from a previous run of the same id
+    fetch('/api/exec/serve', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId: runRef.current.id }),
+    }).catch(() => {});
+    // Initialise workspace with AGENTS.md + CLAUDE.md (fire-and-forget before loop)
+    fetch('/api/exec/workspace-init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId: runRef.current.id, title: runRef.current.title, spec: runRef.current.spec }),
+    }).catch(() => {});
     const started = { ...runRef.current, status: 'running' as RunStatus };
     setRunAndSync(started);
     executeLoop();
@@ -559,6 +616,12 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
 
   const handleStop = useCallback(() => {
     loopRef.current = false;
+    setPreviewUrl(null);
+    fetch('/api/exec/serve', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId: runRef.current.id }),
+    }).catch(() => {});
     const stopped = {
       ...runRef.current,
       status: 'paused' as RunStatus,
@@ -567,6 +630,117 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
       updatedAt: Date.now(),
     };
     setRunAndSync(stopped);
+  }, [setRunAndSync]);
+
+  const handleRestart = useCallback(() => {
+    if (!restartConfirm) {
+      // First click — show confirm state, auto-reset after 3 s
+      setRestartConfirm(true);
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = setTimeout(() => setRestartConfirm(false), 3000);
+      return;
+    }
+    // Second click — execute restart
+    setRestartConfirm(false);
+    if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+    loopRef.current = false;
+    setPreviewUrl(null);
+    // Kill preview server
+    fetch('/api/exec/serve', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId: runRef.current.id }),
+    }).catch(() => {});
+    // Delete workspace files
+    fetch('/api/exec', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId: runRef.current.id }),
+    }).catch(() => {});
+    const r = runRef.current;
+    const specMsg =
+      `Here is the project specification:\n\n---\n${r.spec}\n---\n\n` +
+      `Please analyze the spec and assign the FIRST task to the worker using exactly: ` +
+      `[NEXT_TASK: detailed task description with all context]`;
+    // Clear monitor localStorage so the panel starts fresh
+    try { localStorage.removeItem(monitorKey); } catch { /* ignore */ }
+    setAllFindings([]);
+    setPushState({ status: 'idle' });
+    const restarted: AgentRun = {
+      id: r.id,
+      title: r.title,
+      spec: r.spec,
+      status: 'idle',
+      createdAt: r.createdAt,
+      updatedAt: Date.now(),
+      config: r.config,
+      currentIteration: 0,
+      workerHistory: [],
+      managerHistory: [{ role: 'user', content: specMsg }],
+      log: [logEntry('system', 'status', '🔄 Restarted from beginning.', 'both')],
+      nextStep: 'manager-init',
+      checkpoints: [],
+    };
+    // Re-seed the workspace with AGENTS.md + CLAUDE.md
+    fetch('/api/exec/workspace-init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId: r.id, title: r.title, spec: r.spec }),
+    }).catch(() => {});
+    setRunAndSync(restarted);
+  }, [restartConfirm, setRunAndSync]);
+
+  // ── GitHub push helper ────────────────────────────────────────────────────
+  const triggerGitPush = useCallback((remoteUrl: string) => {
+    setPushState({ status: 'pushing' });
+    fetch('/api/exec/git-push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId: runRef.current.id, remoteUrl }),
+    })
+      .then(r => r.json() as Promise<{ ok: boolean; output?: string }>)
+      .then(d => {
+        setPushState(d.ok
+          ? { status: 'success', message: 'Pushed to GitHub.' }
+          : { status: 'error',   message: d.output ?? 'Push failed' });
+      })
+      .catch(e => {
+        setPushState({ status: 'error', message: e instanceof Error ? e.message : 'Push failed' });
+      });
+  }, []);
+
+  // Auto-push when job reaches 'complete' status
+  useEffect(() => {
+    if (run.status !== 'complete') return;
+    const remote = run.config.githubRepo;
+    if (!remote || pushState.status !== 'idle') return;
+    triggerGitPush(remote);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run.status]);
+
+  /** Called by CheckpointsPanel after a successful restore — informs both agents and pauses if running */
+  const handleRestored = useCallback(() => {
+    const r = runRef.current;
+    const restoreMsg =
+      '[SYSTEM: Checkpoint restored] The workspace files have been rolled back to a previous ' +
+      'checkpoint. Code files may have changed or been removed since the last step. ' +
+      'Acknowledge this and continue accordingly — do NOT repeat work that was already done before the rollback.';
+    const updatedRun = {
+      ...r,
+      workerHistory:  [...r.workerHistory,  { role: 'system' as const, content: restoreMsg }],
+      managerHistory: [...r.managerHistory, { role: 'system' as const, content: restoreMsg }],
+      log: [
+        ...r.log,
+        logEntry('system', 'status', '⏸ Paused — workspace restored to checkpoint. Both agents have been informed.', 'both'),
+      ],
+      updatedAt: Date.now(),
+    };
+    if (r.status === 'running') {
+      loopRef.current = false;
+      setRunAndSync({ ...updatedRun, status: 'paused' });
+    } else {
+      setRunAndSync(updatedRun);
+    }
   }, [setRunAndSync]);
 
   const handleExport = useCallback(() => {
@@ -626,9 +800,9 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
 
     const isWorker = injectTarget === 'worker';
     const histKey  = isWorker ? 'workerHistory' : 'managerHistory';
-    const sysPrompt = isWorker
-      ? (await import('@/services/agentOrchestrator')).WORKER_SYSTEM
-      : (await import('@/services/agentOrchestrator')).MANAGER_SYSTEM;
+    const { getSystemPrompts } = await import('@/services/agentOrchestrator');
+    const prompts = getSystemPrompts(runRef.current.config.category);
+    const sysPrompt = isWorker ? prompts.worker : prompts.manager;
 
     const r = runRef.current;
     const historyWithMsg = [
@@ -723,6 +897,63 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
             📁 Files
           </button>
 
+          <button
+            onClick={() => setCheckpointsOpen(v => !v)}
+            className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border transition-colors ${
+              checkpointsOpen
+                ? 'bg-gray-800 text-white border-gray-800'
+                : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            }`}
+            title="View and restore workspace checkpoints"
+          >
+            📍 Checkpoints
+            {(run.checkpoints?.length ?? 0) > 0 && (
+              <span className="ml-0.5 bg-indigo-500 text-white rounded-full px-1.5 py-px text-[10px] font-bold">
+                {run.checkpoints!.length}
+              </span>
+            )}
+          </button>
+
+          {/* Preview button — 3 states */}
+          {run.previewCommand && !run.previewUnlocked && (
+            <button
+              disabled
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
+              title="Preview will unlock once the worker completes a successful build"
+            >
+              🔒 Preview
+            </button>
+          )}
+          {run.previewCommand && run.previewUnlocked && !previewUrl && (
+            <button
+              onClick={() => {
+                fetch('/api/exec/serve', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ command: run.previewCommand, runId: run.id }),
+                })
+                  .then(r => r.json() as Promise<{ url?: string }>)
+                  .then(d => { if (d.url) setPreviewUrl(d.url); })
+                  .catch(() => {});
+              }}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border bg-blue-600 text-white border-blue-600 hover:bg-blue-700"
+              title="Start preview server and open the app"
+            >
+              ▶ Preview
+            </button>
+          )}
+          {previewUrl && (
+            <a
+              href={previewUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border bg-green-600 text-white border-green-600 hover:bg-green-700"
+              title={`Open preview at ${previewUrl}`}
+            >
+              ↗ Open Preview
+            </a>
+          )}
+
           {/* Monitor toggle */}
           <button
             onClick={() => {
@@ -774,10 +1005,11 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
               ⏸ Pause
             </button>
           )}
-          {run.status === 'paused' && (
+          {(run.status === 'paused' || run.status === 'error') && (
             <button
               onClick={handleResume}
               className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded bg-green-600 text-white hover:bg-green-700"
+              title={run.status === 'error' ? 'Resume despite the error — the run will continue from the last successful step' : undefined}
             >
               ▶ Resume
             </button>
@@ -791,6 +1023,44 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
               ⏹ Stop
             </button>
           )}
+          {run.status !== 'running' && (
+            <button
+              onClick={handleRestart}
+              className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border transition-colors ${
+                restartConfirm
+                  ? 'bg-red-500 text-white border-red-500 hover:bg-red-600'
+                  : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              }`}
+              title={restartConfirm ? 'Click again to confirm — this clears all history' : 'Restart run from the beginning'}
+            >
+              {restartConfirm ? '⚠ Confirm Restart?' : '🔄 Restart'}
+            </button>
+          )}
+
+          {/* GitHub push button — shown when configured and run is not actively running */}
+          {run.config.githubRepo && run.status !== 'running' && run.status !== 'idle' && (
+            <button
+              disabled={pushState.status === 'pushing'}
+              onClick={() => triggerGitPush(run.config.githubRepo!)}
+              title={
+                pushState.status === 'success' ? `Last push succeeded. Click to push again.\n${pushState.message ?? ''}` :
+                pushState.status === 'error'   ? `Last push failed: ${pushState.message ?? ''}. Click to retry.` :
+                `Push workspace to ${run.config.githubRepo}`
+              }
+              className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border transition-colors ${
+                pushState.status === 'pushing' ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed' :
+                pushState.status === 'success' ? 'bg-green-50 text-green-700 border-green-300 hover:bg-green-100' :
+                pushState.status === 'error'   ? 'bg-red-50 text-red-600 border-red-300 hover:bg-red-100' :
+                'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              {pushState.status === 'pushing' ? '⏳ Pushing…' :
+               pushState.status === 'success' ? '✓ Pushed'   :
+               pushState.status === 'error'   ? '✗ Push failed' :
+               '⬆ Push to GitHub'}
+            </button>
+          )}
+
           <button
             onClick={onDelete}
             className="px-3 py-1.5 text-xs font-semibold rounded border border-red-200 text-red-500 hover:bg-red-50"
@@ -810,6 +1080,9 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
             log={run.log}
             loading={workerLoading}
             panelTarget="worker"
+            highlightedEntryId={highlightedEntryId}
+            hideCheckpointMessages={hideCheckpointLogs}
+            onClearHighlight={() => setHighlightedEntryId(null)}
           />
         </div>
         <div className="flex-1 overflow-hidden">
@@ -820,6 +1093,9 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
             log={run.log}
             loading={managerLoading}
             panelTarget="manager"
+            highlightedEntryId={highlightedEntryId}
+            hideCheckpointMessages={hideCheckpointLogs}
+            onClearHighlight={() => setHighlightedEntryId(null)}
           />
         </div>
 
@@ -834,6 +1110,22 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete }: 
               onMonitorModelChange={handleMonitorModelChange}
               aiEnabled={monitorAiEnabled}
               onToggleAi={() => setMonitorAiEnabled(v => !v)}
+            />
+          </div>
+        )}
+
+        {/* Checkpoints panel — collapsible right sidebar */}
+        {checkpointsOpen && (
+          <div className="w-72 shrink-0 overflow-hidden border-l flex flex-col">
+            <CheckpointsPanel
+              runId={run.id}
+              checkpoints={run.checkpoints ?? []}
+              isRunning={run.status === 'running'}
+              onClose={() => setCheckpointsOpen(false)}
+              onRestored={handleRestored}
+              hideCheckpointLogs={hideCheckpointLogs}
+              onToggleHideCheckpointLogs={() => setHideCheckpointLogs(v => !v)}
+              onSelectCheckpoint={(logEntryId) => setHighlightedEntryId(logEntryId)}
             />
           </div>
         )}

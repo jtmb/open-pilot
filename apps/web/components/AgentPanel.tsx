@@ -10,22 +10,29 @@ interface Props {
   loading: boolean;
   /** Which target to filter by ('worker' or 'manager') */
   panelTarget: 'worker' | 'manager';
+  /** Entry id to scroll to and highlight; all others are dimmed */
+  highlightedEntryId?: string | null;
+  /** Hide checkpoint log entries */
+  hideCheckpointMessages?: boolean;
+  /** Called when user clicks a dimmed entry or the backdrop to clear highlight */
+  onClearHighlight?: () => void;
 }
 
 // ─── Styling maps ─────────────────────────────────────────────────────────────
 
-const TYPE_STYLES: Record<LogEntryType, { wrapper: string; badge: string; label: string }> = {
-  task:         { wrapper: 'bg-blue-50 border-blue-200',    badge: 'bg-blue-100 text-blue-700',    label: 'Task'       },
-  output:       { wrapper: 'bg-white border-gray-200',      badge: 'bg-gray-100 text-gray-600',    label: 'Output'     },
-  question:     { wrapper: 'bg-amber-50 border-amber-200',  badge: 'bg-amber-100 text-amber-700',  label: 'Question'   },
-  answer:       { wrapper: 'bg-teal-50 border-teal-200',    badge: 'bg-teal-100 text-teal-700',    label: 'Answer'     },
-  review:       { wrapper: 'bg-purple-50 border-purple-200',badge: 'bg-purple-100 text-purple-700',label: 'Review'     },
-  correction:   { wrapper: 'bg-orange-50 border-orange-200',badge: 'bg-orange-100 text-orange-700',label: 'Correction' },
-  directive:    { wrapper: 'bg-indigo-50 border-indigo-200',badge: 'bg-indigo-100 text-indigo-700',label: 'Directive'  },
-  status:       { wrapper: 'bg-gray-50 border-gray-200',    badge: 'bg-gray-100 text-gray-500',    label: 'System'     },
-  'user-input': { wrapper: 'bg-green-50 border-green-200',  badge: 'bg-green-100 text-green-700',  label: 'You'        },
-  'exec':       { wrapper: 'bg-gray-900 border-gray-700',   badge: 'bg-gray-700 text-green-400',   label: 'Run'        },
-  'exec-result':{ wrapper: 'bg-gray-900 border-gray-700',   badge: 'bg-gray-700 text-gray-300',    label: 'Output'     },
+const TYPE_STYLES: Record<LogEntryType, { wrapper: string; badge: string; label: string; tooltip: string }> = {
+  task:         { wrapper: 'bg-white border border-l-4 border-l-blue-400',    badge: 'bg-blue-50 text-blue-700',    label: 'Task',         tooltip: 'Manager assigned a new task to the worker agent'                                         },
+  output:       { wrapper: 'bg-white border border-gray-200',                  badge: 'bg-gray-100 text-gray-600',   label: 'Output',       tooltip: "Worker's code or text output in response to its last task"                            },
+  question:     { wrapper: 'bg-white border border-l-4 border-l-amber-400',   badge: 'bg-amber-50 text-amber-700',  label: 'Question',     tooltip: 'Worker is asking the manager for clarification before proceeding'                     },
+  answer:       { wrapper: 'bg-white border border-l-4 border-l-teal-400',    badge: 'bg-teal-50 text-teal-700',    label: 'Answer',       tooltip: "Manager answered the worker's question"                                               },
+  review:       { wrapper: 'bg-white border border-l-4 border-l-purple-400',  badge: 'bg-purple-50 text-purple-700',label: 'Review',       tooltip: "Manager's full review of the worker's completed work"                                  },
+  correction:   { wrapper: 'bg-white border border-l-4 border-l-orange-400',  badge: 'bg-orange-50 text-orange-700',label: 'Correction',   tooltip: 'Manager is requesting changes or corrections to the work'                            },
+  directive:    { wrapper: 'bg-white border border-l-4 border-l-indigo-400',  badge: 'bg-indigo-50 text-indigo-700',label: 'Directive',    tooltip: 'Manager is giving the worker explicit instructions or guidance'                      },
+  status:       { wrapper: '',                                                  badge: 'bg-gray-100 text-gray-400',   label: 'System',       tooltip: 'Automated system event or status update (not from an agent)'                        },
+  'user-input': { wrapper: 'bg-white border border-l-4 border-l-green-400',   badge: 'bg-green-50 text-green-700',  label: 'You',          tooltip: 'Your direct message injected into the conversation'                                  },
+  'exec':       { wrapper: 'bg-gray-900 border-gray-700',                      badge: 'bg-gray-700 text-green-400',  label: 'Run',          tooltip: 'Shell command requested by the worker to run in the workspace container'              },
+  'exec-result':{ wrapper: 'bg-gray-900 border-gray-700',                      badge: 'bg-gray-700 text-gray-300',   label: 'Output',       tooltip: 'stdout/stderr output and exit code from the executed shell command'                   },
+  'checkpoint': { wrapper: '',                                                  badge: 'bg-indigo-50 text-indigo-600', label: '📍 Checkpoint', tooltip: 'Workspace snapshot automatically saved after this command succeeded — restorable from the Checkpoints panel' },
 };
 
 const COLLAPSE_THRESHOLD = 400; // chars
@@ -59,16 +66,68 @@ function renderContent(text: string) {
 
 // ─── Single entry ─────────────────────────────────────────────────────────────
 
-function Entry({ entry }: { entry: LogEntry }) {
+function Entry({
+  entry,
+  highlighted,
+  dimmed,
+  onDismiss,
+}: {
+  entry: LogEntry;
+  highlighted?: boolean;
+  dimmed?: boolean;
+  onDismiss?: () => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   const styles = TYPE_STYLES[entry.type] ?? TYPE_STYLES.status;
+
+  const outerClass = [
+    'transition-opacity duration-200',
+    highlighted ? 'ring-2 ring-indigo-400 rounded-lg shadow-lg scroll-mt-4' : '',
+    dimmed ? 'opacity-20 cursor-pointer select-none' : '',
+  ].join(' ');
+
+  // ── Slim annotation for status / checkpoint entries ────────────────────────
+  if (entry.type === 'status') {
+    return (
+      <div
+        data-entry-id={entry.id}
+        className={`flex items-center gap-2 px-2 py-1 border-l-2 border-gray-300 ${outerClass}`}
+        onClick={dimmed ? onDismiss : undefined}
+      >
+        <span className="text-[10px] text-gray-400 shrink-0">{new Date(entry.timestamp).toLocaleTimeString()}</span>
+        <span className="text-xs text-gray-400 italic">{entry.content}</span>
+      </div>
+    );
+  }
+
+  if (entry.type === 'checkpoint') {
+    return (
+      <div
+        data-entry-id={entry.id}
+        className={`flex items-center gap-2 px-2 py-1 border-l-2 border-indigo-300 ${outerClass}`}
+        onClick={dimmed ? onDismiss : undefined}
+      >
+        <span className="text-[10px] text-gray-400 shrink-0">{new Date(entry.timestamp).toLocaleTimeString()}</span>
+        <span className="text-[11px] font-medium text-indigo-500">{entry.content}</span>
+      </div>
+    );
+  }
 
   // ── Terminal-style rendering for exec entries ─────────────────────────────
   if (entry.type === 'exec') {
     return (
-      <div className="border border-gray-700 rounded-lg bg-gray-900 p-3 text-sm font-mono">
+      <div
+        data-entry-id={entry.id}
+        className={`border border-gray-700 rounded-lg bg-gray-900 p-3 text-sm font-mono ${outerClass}`}
+        onClick={dimmed ? onDismiss : undefined}
+      >
         <div className="flex items-center gap-2 mb-1.5">
-          <span className="text-xs font-semibold px-1.5 py-0.5 rounded bg-gray-700 text-green-400">$ run</span>
+          <span
+            className="text-xs font-semibold px-1.5 py-0.5 rounded bg-gray-700 text-green-400 cursor-help"
+            title={TYPE_STYLES['exec'].tooltip}
+          >
+            $ run
+          </span>
           <span className="text-xs text-gray-500">{new Date(entry.timestamp).toLocaleTimeString()}</span>
         </div>
         <span className="text-green-400 text-xs">$ </span>
@@ -86,9 +145,15 @@ function Entry({ entry }: { entry: LogEntry }) {
     const shown    = !isLong || expanded ? output : output.slice(0, COLLAPSE_THRESHOLD) + '…';
 
     return (
-      <div className="border border-gray-700 rounded-lg bg-gray-900 p-3 text-sm font-mono">
+      <div
+        data-entry-id={entry.id}
+        className={`border border-gray-700 rounded-lg bg-gray-900 p-3 text-sm font-mono ${outerClass}`}
+        onClick={dimmed ? onDismiss : undefined}
+      >
         <div className="flex items-center gap-2 mb-1.5">
-          <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${passed ? 'bg-green-800 text-green-300' : 'bg-red-900 text-red-300'}`}>
+          <span className={`text-xs font-semibold px-1.5 py-0.5 rounded cursor-help ${passed ? 'bg-green-800 text-green-300' : 'bg-red-900 text-red-300'}`}
+            title={TYPE_STYLES['exec-result'].tooltip}
+          >
             {passed ? '✓' : '✗'} {exitLine}
           </span>
           <span className="text-xs text-gray-500">{new Date(entry.timestamp).toLocaleTimeString()}</span>
@@ -115,9 +180,13 @@ function Entry({ entry }: { entry: LogEntry }) {
   const displayContent = !isLong || expanded ? entry.content : entry.content.slice(0, COLLAPSE_THRESHOLD) + '…';
 
   return (
-    <div className={`border rounded-lg p-3 text-sm ${styles.wrapper}${entry.monitorAdvised ? ' border-l-4 border-l-teal-400' : ''}`}>
+    <div
+      data-entry-id={entry.id}
+      className={`rounded-lg p-3 text-sm ${styles.wrapper}${entry.monitorAdvised ? ' border-l-teal-400' : ''} ${outerClass}`}
+      onClick={dimmed ? onDismiss : undefined}
+    >
       <div className="flex items-center gap-2 mb-1.5">
-        <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${styles.badge}`}>
+        <span className={`text-xs font-semibold px-1.5 py-0.5 rounded cursor-help ${styles.badge}`} title={styles.tooltip}>
           {styles.label}
         </span>
         <span className="text-xs text-gray-400">
@@ -146,14 +215,38 @@ function Entry({ entry }: { entry: LogEntry }) {
 
 // ─── Panel ────────────────────────────────────────────────────────────────────
 
-export default function AgentPanel({ label, icon, modelBadge, log, loading, panelTarget }: Props) {
+export default function AgentPanel({
+  label,
+  icon,
+  modelBadge,
+  log,
+  loading,
+  panelTarget,
+  highlightedEntryId,
+  hideCheckpointMessages,
+  onClearHighlight,
+}: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  const visible = log.filter(e => e.target === panelTarget || e.target === 'both');
+  const visible = log.filter(
+    e =>
+      (e.target === panelTarget || e.target === 'both') &&
+      !(hideCheckpointMessages && e.type === 'checkpoint'),
+  );
 
+  // Auto-scroll to bottom when new messages arrive (skip when a message is highlighted)
   useEffect(() => {
+    if (highlightedEntryId) return;
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [visible.length]);
+  }, [visible.length, highlightedEntryId]);
+
+  // Scroll to highlighted entry when it changes
+  useEffect(() => {
+    if (!highlightedEntryId || !containerRef.current) return;
+    const el = containerRef.current.querySelector(`[data-entry-id="${highlightedEntryId}"]`);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [highlightedEntryId]);
 
   return (
     <div className="flex flex-col h-full min-w-0">
@@ -169,14 +262,20 @@ export default function AgentPanel({ label, icon, modelBadge, log, loading, pane
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-white">
+      <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-white" ref={containerRef}>
         {visible.length === 0 && (
           <div className="flex items-center justify-center h-full text-gray-400 text-sm">
             {loading ? 'Waiting…' : 'No messages yet.'}
           </div>
         )}
         {visible.map(entry => (
-          <Entry key={entry.id} entry={entry} />
+          <Entry
+            key={entry.id}
+            entry={entry}
+            highlighted={highlightedEntryId === entry.id}
+            dimmed={!!highlightedEntryId && highlightedEntryId !== entry.id}
+            onDismiss={onClearHighlight}
+          />
         ))}
         {loading && (
           <div className="flex items-center gap-2 text-xs text-gray-400 animate-pulse px-1">

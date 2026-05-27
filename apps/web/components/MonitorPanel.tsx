@@ -17,11 +17,29 @@ const SEV_STYLE: Record<string, { wrap: string; badge: string; icon: string }> =
   info:    { wrap: 'bg-sky-50 border-sky-200',       badge: 'bg-sky-100 text-sky-700',       icon: '🔵' },
 };
 
+const SEV_TOOLTIP: Record<string, string> = {
+  error:   'Blocking issue — the run may be stuck or producing incorrect results. Immediate attention recommended.',
+  warning: 'Potential problem — worth reviewing but not necessarily blocking. Monitor for recurrence.',
+  info:    'Observation or suggestion — informational only, no action required.',
+};
+
 const CAT_LABEL: Record<string, string> = {
   loop:           'Loop',
   compliance:     'Compliance',
   'task-quality': 'Task',
   suggestion:     'Suggestion',
+};
+
+const CAT_TOOLTIP: Record<string, string> = {
+  loop:           'Loop detection — the agent appears to be repeating the same actions without making progress.',
+  compliance:     'Compliance check — the agent may be violating rules or constraints from the specification.',
+  'task-quality': 'Task quality — the output may be incomplete, incorrect, or not meeting the requirements.',
+  suggestion:     'Suggestion — an optional improvement identified by the monitor. Not a problem.',
+};
+
+const SOURCE_TOOLTIP: Record<string, string> = {
+  ai:   'Found by AI analysis — the monitor model reviewed recent activity and flagged this finding.',
+  rule: 'Found by a built-in rule — a deterministic check that runs automatically on every iteration.',
 };
 
 interface Props {
@@ -103,14 +121,25 @@ export default function MonitorPanel({ findings, isAnalyzing, models, monitorMod
           return (
             <div key={f.id} className={`border rounded-lg p-2.5 ${s.wrap}`}>
               <div className="flex items-start gap-1.5">
-                <span className="mt-0.5 shrink-0 text-sm">{s.icon}</span>
+                <span
+                  className="mt-0.5 shrink-0 text-sm cursor-help"
+                  title={SEV_TOOLTIP[f.severity] ?? f.severity}
+                >
+                  {s.icon}
+                </span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${s.badge}`}>
+                    <span
+                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded cursor-help ${s.badge}`}
+                      title={CAT_TOOLTIP[f.category] ?? f.category}
+                    >
                       {CAT_LABEL[f.category] ?? f.category}
                     </span>
                     <span className="text-[10px] text-gray-400">iter {f.iteration}</span>
-                    <span className="text-[10px] text-gray-400">
+                    <span
+                      className="text-[10px] text-gray-400 cursor-help"
+                      title={SOURCE_TOOLTIP[f.source] ?? f.source}
+                    >
                       {f.source === 'ai' ? '✨ AI' : '⚡ rule'}
                     </span>
                   </div>

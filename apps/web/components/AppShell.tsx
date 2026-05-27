@@ -1,6 +1,7 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { SessionProvider } from 'next-auth/react';
+import { SessionProvider, useSession } from 'next-auth/react';
+import LoginScreen from './LoginScreen';
 import Sidebar, { type Conversation } from './Sidebar';
 import Dashboard from './Dashboard';
 import ChatBox, { type ConversationData } from './ChatBox';
@@ -35,7 +36,21 @@ function saveAgentRuns(runs: AgentRun[]) {
   localStorage.setItem(RUNS_STORAGE_KEY, JSON.stringify(runs));
 }
 
-export default function AppShell() {
+function AppShellInner() {
+  const { data: session, status: sessionStatus } = useSession();
+  const [hasCredentials, setHasCredentials] = useState(false);
+  const [credChecked, setCredChecked] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/auth/github-credentials')
+      .then(r => r.json())
+      .then((d: { hasCredentials: boolean }) => {
+        setHasCredentials(d.hasCredentials);
+        setCredChecked(true);
+      })
+      .catch(() => setCredChecked(true));
+  }, []);
+
   const [activeTab, setActiveTab] = useState<'dashboard' | 'chat' | 'docs' | 'autopilot'>('chat');
   const [model, setModel] = useState('');
   const [mode, setMode]   = useState<Mode>('ask');
@@ -215,8 +230,20 @@ export default function AppShell() {
 
   const handleRunDelete = useCallback(() => {
     if (!activeRunId) return;
+    const runId = activeRunId;
+
+    // Fire-and-forget: stop preview + delete workspace files in code-server
+    fetch('/api/exec', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId }),
+    }).catch(() => {});
+
+    // Clear persisted monitor state for this run
+    try { localStorage.removeItem(`openpilot:monitor:${runId}`); } catch { /* ignore */ }
+
     setAgentRuns(prev => {
-      const next = prev.filter(r => r.id !== activeRunId);
+      const next = prev.filter(r => r.id !== runId);
       setActiveRunId(next.length > 0 ? next[0].id : null);
       return next;
     });
@@ -229,8 +256,22 @@ export default function AppShell() {
 
   const activeConversation = conversations.find(c => c.id === activeId) ?? conversations[0];
 
+  // Show loading spinner while we check credentials and session status
+  if (!credChecked || sessionStatus === 'loading') {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-950">
+        <div className="text-gray-400 text-sm">Loading…</div>
+      </div>
+    );
+  }
+
+  // If credentials are configured but the user isn't signed in, show the login screen
+  if (hasCredentials && !session) {
+    return <LoginScreen />;
+  }
+
   return (
-    <SessionProvider>
+    <>
       <div className="flex h-screen w-screen overflow-hidden">
         <Sidebar
           conversations={sidebarConvs}
@@ -319,6 +360,14 @@ export default function AppShell() {
           onClose={() => setShowNewRunModal(false)}
         />
       )}
+    </>
+  );
+}
+
+export default function AppShell() {
+  return (
+    <SessionProvider>
+      <AppShellInner />
     </SessionProvider>
   );
 }

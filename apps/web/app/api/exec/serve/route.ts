@@ -1,27 +1,25 @@
-// app/api/exec/route.ts
-// POST   /api/exec — run a command in the code-server container
-// DELETE /api/exec — delete the workspace directory for a run
+// app/api/exec/serve/route.ts
+// POST  — start a preview server in the code-server container
+// DELETE — stop the preview server
 
 import { NextRequest, NextResponse } from 'next/server';
-import { runInContainer, writeFilesToContainer, stopPreviewServer } from '@/services/dockerExec';
+import { startPreviewServer, stopPreviewServer } from '@/services/dockerExec';
 
-interface ExecRequestBody {
+interface ServeRequestBody {
   command: string;
   runId:   string;
-  files?:  Array<{ path: string; content: string }>;
 }
 
 export async function POST(req: NextRequest) {
-  let body: ExecRequestBody;
+  let body: ServeRequestBody;
   try {
-    body = await req.json() as ExecRequestBody;
+    body = await req.json() as ServeRequestBody;
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { command, runId, files } = body;
+  const { command, runId } = body;
 
-  // Input validation
   if (!command || typeof command !== 'string' || command.trim().length === 0) {
     return NextResponse.json({ error: 'command is required' }, { status: 400 });
   }
@@ -32,27 +30,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'command too long' }, { status: 400 });
   }
 
-  const workspaceDir = `/home/coder/workspace/${runId}`;
-
   try {
-    // Write files to workspace first
-    if (files && files.length > 0) {
-      await writeFilesToContainer(runId, files);
-    } else {
-      // Ensure workspace directory exists even with no files
-      await runInContainer(`mkdir -p '${workspaceDir}'`, '/home/coder', 10_000);
-    }
-
-    // Run the command in the workspace
-    const result = await runInContainer(command, workspaceDir, 60_000);
-    return NextResponse.json({ output: result.output, exitCode: result.exitCode });
+    await startPreviewServer(runId, command.trim());
+    // Build the preview URL relative to the host the browser is actually using,
+    // so it works whether the app is accessed via localhost, WSL, or a remote IP.
+    const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? 'localhost';
+    const protocol = req.headers.get('x-forwarded-proto') ?? 'http';
+    const hostname = host.split(':')[0];
+    return NextResponse.json({ url: `${protocol}://${hostname}:4000` });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
-// DELETE /api/exec  — stop preview server and remove workspace directory
 export async function DELETE(req: NextRequest) {
   let body: { runId: string };
   try {
@@ -67,14 +58,7 @@ export async function DELETE(req: NextRequest) {
   }
 
   try {
-    // Stop any running preview server for this run
     await stopPreviewServer(runId);
-    // Delete the workspace directory
-    await runInContainer(
-      `rm -rf '/home/coder/workspace/${runId}'`,
-      '/home/coder',
-      30_000,
-    );
     return NextResponse.json({ ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

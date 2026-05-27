@@ -20,7 +20,9 @@ services:
     depends_on:
       - code-server
   code-server:
-    image: codercom/code-server:latest
+    build:
+      context: .
+      dockerfile: code-server.Dockerfile
     environment:
       - PASSWORD=changeme
     volumes:
@@ -31,6 +33,7 @@ services:
     ports:
       - "8080:8080"
       - "3001:3001"
+      - "4000:4000"
     command: ["--auth", "password", "--port", "8080", "/home/coder/project"]
 
 volumes:

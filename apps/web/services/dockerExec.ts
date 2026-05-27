@@ -141,7 +141,7 @@ export async function runInContainer(
   const createRes = await dockerRequest('POST', `/containers/${containerId}/exec`, {
     AttachStdout: true,
     AttachStderr: true,
-    Cmd: ['sh', '-c', command],
+    Cmd: ['bash', '-c', command],
     WorkingDir: cwd,
   });
   if (createRes.status !== 201) {
@@ -190,8 +190,9 @@ export async function writeFileToContainer(
   const b64 = Buffer.from(content, 'utf8').toString('base64');
 
   // mkdir -p + write via base64 decode
+  // Use /home/coder as CWD — WORKSPACE_ROOT may not exist yet
   const cmd = `mkdir -p '${dir}' && printf '%s' '${b64}' | base64 -d > '${fullPath}'`;
-  const result = await runInContainer(cmd, WORKSPACE_ROOT, 15_000);
+  const result = await runInContainer(cmd, '/home/coder', 15_000);
   if (result.exitCode !== 0) {
     throw new Error(`Failed to write file ${cleanPath}: ${result.output}`);
   }
@@ -207,4 +208,60 @@ export async function writeFilesToContainer(
   for (const file of files) {
     await writeFileToContainer(runId, file.path, file.content);
   }
+}
+
+// ─── Preview server management ────────────────────────────────────────────────
+
+/** Port that preview servers must listen on inside the container. */
+export const PREVIEW_PORT = 4000;
+
+/** In-process PID store so we can kill the right process later. */
+const previewPids = new Map<string, number>();
+
+/**
+ * Start a long-running preview server inside the code-server container.
+ * Kills any previous preview first (same runId or whatever is on port 4000).
+ *
+ * @param runId    Identifier for the run (used for workspace dir + log file)
+ * @param command  Shell command to run (must listen on PREVIEW_PORT)
+ * @returns        The preview URL (http://localhost:4000)
+ */
+export async function startPreviewServer(
+  runId: string,
+  command: string,
+): Promise<string> {
+  if (!/^[a-zA-Z0-9_\-]+$/.test(runId)) throw new Error('Invalid runId');
+
+  // Kill any running preview first
+  await stopPreviewServer(runId);
+
+  const cwd = `${WORKSPACE_ROOT}/${runId}`;
+  const logFile = `/tmp/preview-${runId}.log`;
+
+  // Run command detached; echo PID to stdout so we can capture it
+  const bgCmd = `cd '${cwd}' && nohup sh -c ${JSON.stringify(command)} > '${logFile}' 2>&1 & echo $!`;
+  const result = await runInContainer(bgCmd, WORKSPACE_ROOT, 10_000);
+  const pid = parseInt(result.output.trim(), 10);
+  if (!Number.isFinite(pid) || pid <= 0) {
+    throw new Error(`Failed to start preview server (output: ${result.output.trim()})`);
+  }
+
+  previewPids.set(runId, pid);
+  return `http://localhost:${PREVIEW_PORT}`;
+}
+
+/**
+ * Stop the preview server associated with a run.
+ * Falls back to killing whatever is on PREVIEW_PORT if no stored PID.
+ */
+export async function stopPreviewServer(runId: string): Promise<void> {
+  const pid = previewPids.get(runId);
+  previewPids.delete(runId);
+
+  const killCmd = pid
+    ? `kill -9 ${pid} 2>/dev/null; kill $(lsof -ti:${PREVIEW_PORT} 2>/dev/null) 2>/dev/null; true`
+    : `kill $(lsof -ti:${PREVIEW_PORT} 2>/dev/null) 2>/dev/null; true`;
+
+  // Use /home/coder as CWD — workspace may not exist at stop time
+  await runInContainer(killCmd, '/home/coder', 10_000);
 }

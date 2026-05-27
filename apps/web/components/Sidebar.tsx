@@ -1,6 +1,7 @@
 'use client';
 import { FC } from 'react';
 import type { AgentRun, RunStatus } from '@/services/agentOrchestrator';
+import ProfileMenu from './ProfileMenu';
 
 export interface Conversation {
   id: string;
@@ -156,9 +157,7 @@ const Sidebar: FC<Props> = ({
         )}
       </div>
 
-      <div className="px-4 py-3 border-t border-gray-800 text-xs text-gray-500 shrink-0">
-        OpenPilot for VS Code
-      </div>
+      <ProfileMenu />
     </aside>
   );
 };
