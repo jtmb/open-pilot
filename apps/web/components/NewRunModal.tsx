@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { createAgentRun, type AgentRun, type AgentRunConfig } from '@/services/agentOrchestrator';
-import { bestFreeModel, type CopilotModel } from './ModelSelector';
+import { bestFreeModel, multiplierLabel, type CopilotModel } from './ModelSelector';
 
 const RUN_PREFS_KEY = 'openpilot_run_prefs';
 
@@ -13,15 +13,12 @@ interface SavedRunPrefs {
   fillModel?: string;
   maxIterations?: number;
   approvalMode?: 'approvals' | 'bypass' | 'autopilot';
+  buildCommand?: string;
 }
 
 interface Props {
   onStart: (run: AgentRun) => void;
   onClose: () => void;
-}
-
-function multiplierLabel(m: number | 'free'): string {
-  return m === 'free' ? '0x' : `${m}x`;
 }
 
 function ModelPicker({
@@ -93,6 +90,7 @@ export default function NewRunModal({ onStart, onClose }: Props) {
   const [managerEffort, setManagerEffort] = useState('');
   const [maxIterations, setMaxIterations] = useState(10);
   const [approvalMode, setApprovalMode] = useState<'approvals' | 'bypass' | 'autopilot'>('approvals');
+  const [buildCommand, setBuildCommand] = useState('');
   const [specFullscreen, setSpecFullscreen] = useState(false);
 
   // Fill with AI
@@ -133,6 +131,7 @@ export default function NewRunModal({ onStart, onClose }: Props) {
           if (saved.managerEffort !== undefined) setManagerEffort(saved.managerEffort);
           if (saved.maxIterations !== undefined) setMaxIterations(saved.maxIterations);
           if (saved.approvalMode  !== undefined) setApprovalMode(saved.approvalMode);
+          if (saved.buildCommand  !== undefined) setBuildCommand(saved.buildCommand);
         }
       })
       .catch(() => {});
@@ -170,8 +169,9 @@ export default function NewRunModal({ onStart, onClose }: Props) {
       managerReasoningEffort: managerEffort,
       maxIterations,
       approvalMode,
+      buildCommand: buildCommand.trim() || undefined,
     };
-    savePrefs({ workerModel, workerEffort, managerModel, managerEffort, fillModel, maxIterations, approvalMode });
+    savePrefs({ workerModel, workerEffort, managerModel, managerEffort, fillModel, maxIterations, approvalMode, buildCommand: buildCommand.trim() });
     onStart(createAgentRun(title.trim(), spec.trim(), config));
   };
 
@@ -288,18 +288,35 @@ export default function NewRunModal({ onStart, onClose }: Props) {
             <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1">
               Max Iterations (auto-pause after this many steps)
             </label>
-            <input
-              type="number"
-              min={1}
-              max={100}
-              className="border rounded px-3 py-2 text-sm w-24"
-              value={maxIterations}
-              onChange={e => {
-                const v = Math.max(1, parseInt(e.target.value) || 10);
-                setMaxIterations(v);
-                savePrefs({ maxIterations: v });
-              }}
-            />
+            <div className="flex items-center gap-3">
+              <input
+                type="number"
+                min={1}
+                max={999}
+                disabled={maxIterations === 0}
+                className="border rounded px-3 py-2 text-sm w-24 disabled:opacity-40 disabled:cursor-not-allowed"
+                value={maxIterations === 0 ? '' : maxIterations}
+                placeholder="10"
+                onChange={e => {
+                  const v = Math.max(1, parseInt(e.target.value) || 10);
+                  setMaxIterations(v);
+                  savePrefs({ maxIterations: v });
+                }}
+              />
+              <label className="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={maxIterations === 0}
+                  onChange={e => {
+                    const v = e.target.checked ? 0 : 10;
+                    setMaxIterations(v);
+                    savePrefs({ maxIterations: v });
+                  }}
+                  className="rounded"
+                />
+                ∞ Unlimited
+              </label>
+            </div>
           </div>
 
           {/* Approval mode */}
@@ -320,6 +337,24 @@ export default function NewRunModal({ onStart, onClose }: Props) {
               <option value="bypass">⏩ Bypass Approvals — skip confirmations</option>
               <option value="autopilot">✈️ Autopilot — run fully autonomously</option>
             </select>
+          </div>
+          {/* Build command */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1">
+              Build / Test Command <span className="text-gray-400 font-normal normal-case">(optional)</span>
+            </label>
+            <input
+              className="w-full border rounded px-3 py-2 text-sm font-mono"
+              placeholder="e.g. npm test  or  npm run build"
+              value={buildCommand}
+              onChange={e => {
+                setBuildCommand(e.target.value);
+                savePrefs({ buildCommand: e.target.value });
+              }}
+            />
+            <p className="mt-1 text-xs text-gray-400">
+              Runs automatically after the worker says [DONE]. Worker sees the output and can fix errors before manager review.
+            </p>
           </div>
         </form>
 

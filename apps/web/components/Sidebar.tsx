@@ -148,7 +148,7 @@ const Sidebar: FC<Props> = ({
                 >
                   <span className={`w-2 h-2 rounded-full shrink-0 ${dot.cls} ${dot.pulse ? 'animate-pulse' : ''}`} />
                   <span className="flex-1 truncate text-xs">{run.title}</span>
-                  <span className="text-gray-500 text-xs">{run.currentIteration}/{run.config.maxIterations}</span>
+                  <span className="text-gray-500 text-xs">{run.currentIteration}/{run.config.maxIterations === 0 ? '∞' : run.config.maxIterations}</span>
                 </div>
               );
             })}

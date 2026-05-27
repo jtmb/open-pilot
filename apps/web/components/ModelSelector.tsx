@@ -26,7 +26,7 @@ const MODES: { id: Mode; label: string }[] = [
   { id: 'agent', label: 'Agent' },
 ];
 
-function multiplierLabel(m: number | 'free'): string {
+export function multiplierLabel(m: number | 'free'): string {
   if (m === 'free') return '0x';
   return `${m}x`;
 }

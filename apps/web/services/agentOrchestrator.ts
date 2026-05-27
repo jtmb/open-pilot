@@ -14,15 +14,17 @@ export type NextStep =
   | null;
 
 export type LogEntryType =
-  | 'task'        // manager assigns a task to worker
-  | 'output'      // worker produces code/output
-  | 'question'    // worker asks manager a question
-  | 'answer'      // manager answers worker question
-  | 'review'      // manager's full review response
-  | 'correction'  // manager requests corrections
-  | 'directive'   // manager's full response (task assignment etc.)
-  | 'status'      // system/status message
-  | 'user-input'; // user injection
+  | 'task'         // manager assigns a task to worker
+  | 'output'       // worker produces code/output
+  | 'question'     // worker asks manager a question
+  | 'answer'       // manager answers worker question
+  | 'review'       // manager's full review response
+  | 'correction'   // manager requests corrections
+  | 'directive'    // manager's full response (task assignment etc.)
+  | 'status'       // system/status message
+  | 'user-input'   // user injection
+  | 'exec'         // shell command requested by worker
+  | 'exec-result'; // output from a shell command
 
 export interface AgentMessage {
   role: 'system' | 'user' | 'assistant';
@@ -37,6 +39,8 @@ export interface LogEntry {
   content: string;
   /** Which panel(s) this entry appears in */
   target: 'worker' | 'manager' | 'both';
+  /** True when this entry was produced while a monitor advisory was in context */
+  monitorAdvised?: boolean;
 }
 
 export interface AgentRunConfig {
@@ -46,6 +50,8 @@ export interface AgentRunConfig {
   managerReasoningEffort: string;
   maxIterations: number;
   approvalMode: 'approvals' | 'bypass' | 'autopilot';
+  /** Optional shell command to auto-run after each worker [DONE] (e.g. "npm test") */
+  buildCommand?: string;
 }
 
 export interface AgentRun {
@@ -79,8 +85,15 @@ For each task:
    \`\`\`
 3. Never use placeholders, TODOs, or "// implement this later" — write real, runnable code.
 4. If you have a clarifying question, include it as: [QUESTION: your question here]
-5. End your response with [DONE] when you have completed the task.
-6. If you are completely blocked and cannot continue, end with [BLOCKED: reason].
+5. You have a terminal in your workspace. Use [EXEC: command] to run shell commands:
+   - Install dependencies:  [EXEC: npm install]
+   - Build:                 [EXEC: npm run build]
+   - Run tests:             [EXEC: npm test]
+   - Any shell command:     [EXEC: node -e "console.log('hi')"]
+   All code files you output are automatically synced to your workspace before each command runs.
+   After receiving the command output, fix any errors and run again until it passes.
+6. End your response with [DONE] when you have completed the task (and any build/tests pass).
+7. If you are completely blocked and cannot continue, end with [BLOCKED: reason].
 
 Write production-quality code. Never truncate or omit code.`;
 
@@ -98,7 +111,8 @@ Rules:
 - Assign exactly ONE task at a time — do not batch multiple features in one [NEXT_TASK]
 - Be specific: include all necessary context in [NEXT_TASK] so the worker doesn't need to ask basic questions
 - In [CORRECTION], name the exact file, function, or line that needs changing
-- Do not emit [COMPLETE] until every feature in the spec is implemented and reviewed`;
+- Do not emit [COMPLETE] until every feature in the spec is implemented and reviewed
+- CRITICAL: Every response you produce MUST end with exactly one of the tokens above. Never write a response that does not end with [NEXT_TASK:...], [CORRECTION:...], [ANSWER:...], or [COMPLETE]. Keep your analysis brief — emit the token as early as possible.`;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -118,13 +132,14 @@ export function logEntry(
 // ─── Token Parser ─────────────────────────────────────────────────────────────
 
 interface Tokens {
-  question?:   string;
-  answer?:     string;
-  nextTask?:   string;
-  correction?: string;
-  blocked?:    string;
-  done:        boolean;
-  complete:    boolean;
+  question?:     string;
+  answer?:       string;
+  nextTask?:     string;
+  correction?:   string;
+  blocked?:      string;
+  execCommands:  string[];
+  done:          boolean;
+  complete:      boolean;
 }
 
 /**
@@ -152,14 +167,26 @@ function grabToken(text: string, name: string): string | undefined {
 }
 
 export function parseTokens(text: string): Tokens {
+  // Extract all [EXEC: command] tokens (may appear multiple times)
+  const execCommands: string[] = [];
+  let searchFrom = 0;
+  while (true) {
+    const cmd = grabToken(text.slice(searchFrom), 'EXEC');
+    if (!cmd) break;
+    execCommands.push(cmd.trim());
+    const idx = text.indexOf('[EXEC:', searchFrom);
+    searchFrom = idx + 6 + cmd.length + 1; // advance past this token
+  }
+
   return {
-    question:   grabToken(text, 'QUESTION'),
-    answer:     grabToken(text, 'ANSWER'),
-    nextTask:   grabToken(text, 'NEXT_TASK'),
-    correction: grabToken(text, 'CORRECTION'),
-    blocked:    grabToken(text, 'BLOCKED'),
-    done:       /\[DONE\]/.test(text),
-    complete:   /\[COMPLETE\]/.test(text),
+    question:    grabToken(text, 'QUESTION'),
+    answer:      grabToken(text, 'ANSWER'),
+    nextTask:    grabToken(text, 'NEXT_TASK'),
+    correction:  grabToken(text, 'CORRECTION'),
+    blocked:     grabToken(text, 'BLOCKED'),
+    execCommands,
+    done:        /\[DONE\]/.test(text),
+    complete:    /\[COMPLETE\]/.test(text),
   };
 }
 
@@ -230,7 +257,7 @@ export function applyReply(
 
   // ── Manager responded ─────────────────────────────────────────────────────
   if (step !== 'worker-execute') {
-    const newManagerHistory: AgentMessage[] = [
+    let newManagerHistory: AgentMessage[] = [
       ...run.managerHistory,
       { role: 'assistant', content: reply },
     ];
@@ -275,7 +302,32 @@ export function applyReply(
       ];
 
     } else {
-      newLog.push(logEntry('system', 'status', '⏸ Manager response contained no recognized token. Run paused — use the steer box to guide it.', 'both'));
+      // No recognized token — auto-recover once before giving up.
+      // Check whether the message that prompted this reply was already a recovery prompt.
+      const prevUserMsg = run.managerHistory[run.managerHistory.length - 1];
+      const alreadyRecovered =
+        prevUserMsg?.role === 'user' &&
+        prevUserMsg.content.startsWith('Your last response did not include');
+
+      if (!alreadyRecovered) {
+        newLog.push(logEntry('system', 'status',
+          '⚠️ Manager reply had no recognized token — auto-recovering…', 'both'));
+        const recoveryMsg =
+          `Your last response did not include any of the required tokens.\n` +
+          `You MUST end your response with exactly one of:\n` +
+          `- [NEXT_TASK: detailed task description]\n` +
+          `- [CORRECTION: exact changes needed]\n` +
+          `- [ANSWER: your answer]  (only when replying to a worker question)\n` +
+          `- [COMPLETE]  (only when every spec feature is fully implemented)\n\n` +
+          `Please respond again now, ending with the correct token.`;
+        newManagerHistory = [...newManagerHistory, { role: 'user', content: recoveryMsg }];
+        nextStep = step; // retry the exact same manager step
+        status = 'running';
+      } else {
+        newLog.push(logEntry('system', 'status',
+          '⏸ Manager produced no recognized token after auto-recovery. Run paused — use the steer box to guide it.',
+          'both'));
+      }
     }
 
     return {
