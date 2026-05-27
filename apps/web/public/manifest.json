@@ -1,0 +1,10 @@
+{
+  "name": "OpenPilot for VS Code",
+  "short_name": "OpenPilot",
+  "description": "Unattended AI app builder using VS Code Copilot.",
+  "icons": [],
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#000000"
+}

@@ -1,0 +1,40 @@
+services:
+  web:
+    build:
+      context: ../apps/web
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXTAUTH_URL=http://localhost:3000
+      - CODE_SERVER_URL=http://code-server:8080
+      - CODE_SERVER_BRIDGE_URL=http://code-server:3001
+      - DATABASE_URL=file:/data/openpilot.db
+    env_file:
+      - ../apps/web/.env
+    volumes:
+      - ../apps/web/.env:/.env
+      - /var/run/docker.sock:/var/run/docker.sock
+      - copilot-auth:/copilot-auth
+      - openpilot-data:/data
+    depends_on:
+      - code-server
+  code-server:
+    image: codercom/code-server:latest
+    environment:
+      - PASSWORD=changeme
+    volumes:
+      - ./:/home/coder/project
+      - copilot-auth:/home/coder/.local/share/code-server/User/globalStorage/github.copilot
+      - ./code-server-settings.json:/home/coder/.local/share/code-server/User/settings.json:ro
+      - ./copilot-bridge:/home/coder/.local/share/code-server/extensions/copilot-bridge
+    ports:
+      - "8080:8080"
+      - "3001:3001"
+    command: ["--auth", "password", "--port", "8080", "/home/coder/project"]
+
+volumes:
+  copilot-auth: {}
+  openpilot-data: {}
+
+

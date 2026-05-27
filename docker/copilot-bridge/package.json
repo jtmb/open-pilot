@@ -1,0 +1,12 @@
+{
+  "name": "copilot-bridge",
+  "displayName": "Copilot Bridge",
+  "description": "Exposes GitHub Copilot LM API over HTTP so external services can query it",
+  "version": "0.1.0",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "extensionKind": ["workspace"],
+  "contributes": {}
+}

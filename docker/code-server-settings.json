@@ -1,0 +1,5 @@
+{
+  "security.workspace.trust.enabled": false,
+  "github.copilot.chat.askAgent.model": "gpt-4o",
+  "github.copilot.chat.implementAgent.model": "gpt-4o"
+}
