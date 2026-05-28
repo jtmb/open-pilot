@@ -52,7 +52,7 @@ function AppShellInner() {
     return () => clearTimeout(t);
   }, []);
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'chat' | 'docs' | 'autopilot' | 'apikeys' | 'editor'>('chat');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'chat' | 'docs' | 'autopilot' | 'apikeys'>('chat');
   const [model, setModel] = useState('');
   const [mode, setMode]   = useState<Mode>('ask');
   const [reasoningEffort, setReasoningEffort] = useState('');
@@ -375,19 +375,7 @@ function AppShellInner() {
             {activeTab === 'dashboard' && <Dashboard agentRuns={agentRuns} conversations={conversations} onSelectRun={(id) => { setActiveRunId(id); setActiveTab('autopilot'); }} onSelectConv={(id) => { setActiveId(id); setActiveTab('chat'); }} />}
             {activeTab === 'docs'      && <Documentation />}
             {activeTab === 'apikeys'   && <ApiKeysManager />}
-            {activeTab === 'editor'    && (
-              <div className="flex flex-col items-center justify-center h-full gap-4">
-                <p className="text-gray-400 text-sm">Opens in a new browser tab. Password: <code className="bg-gray-800 px-1 rounded">changeme</code></p>
-                <a
-                  href={`${window.location.protocol}//${window.location.hostname}:8080`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium"
-                >
-                  Open Code Editor
-                </a>
-              </div>
-            )}
+
             {activeTab === 'chat'      && hydrated && activeConversation && (
               <ChatBox
                 key={activeConversation.id}

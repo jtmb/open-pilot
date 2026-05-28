@@ -3,10 +3,10 @@ services:
     build:
       context: ../apps/web
     ports:
-      - "3003:3000"
+      - "3000:3000"
     environment:
       - NODE_ENV=production
-      - NEXTAUTH_URL=http://localhost:3003
+      - NEXTAUTH_URL=http://localhost:3000
       - CODE_SERVER_URL=http://code-server:8080
       - CODE_SERVER_BRIDGE_URL=http://code-server:3001
       - DATABASE_URL=postgresql://openpilot:changeme@postgres:5432/openpilot

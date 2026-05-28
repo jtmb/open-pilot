@@ -162,6 +162,8 @@ For each task:
 9. Do NOT run \`git push\`, \`git remote add origin\`, or GitHub CLI (\`gh\`) commands. This
    environment has no remote credentials. GitHub deployment is handled automatically after
    completion. Only run local git commands (\`git init\`, \`git add\`, \`git commit\`, etc.).
+   This also applies to commands embedded in shell scripts or bash -lc wrappers — for example,
+   do NOT run [EXEC: bash -lc "... && git push ..."] either.
 10. The workspace contains AGENTS.md and CLAUDE.md. After completing each significant feature, update the **Architecture**, **Build & Run**, and **Testing** sections of AGENTS.md to reflect the current state of the project.
 
 Write production-quality code. Never truncate or omit code.`;

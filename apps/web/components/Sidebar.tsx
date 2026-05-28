@@ -9,7 +9,7 @@ export interface Conversation {
   createdAt: number;
 }
 
-type Tab = 'dashboard' | 'chat' | 'docs' | 'autopilot' | 'apikeys' | 'editor';
+type Tab = 'dashboard' | 'chat' | 'docs' | 'autopilot' | 'apikeys';
 
 const STATUS_DOT: Record<RunStatus, { cls: string; pulse: boolean }> = {
   idle:     { cls: 'bg-gray-400',   pulse: false },
@@ -66,7 +66,7 @@ const Sidebar: FC<Props> = ({
 
       {/* Nav */}
       <nav className="flex flex-col gap-1 px-2 pt-3 pb-2 border-b border-gray-800 shrink-0">
-        {(['dashboard', 'chat', 'autopilot', 'editor', 'docs', 'apikeys'] as const).map(tab => (
+        {(['dashboard', 'chat', 'autopilot', 'docs', 'apikeys'] as const).map(tab => (
           <button
             key={tab}
             className={`text-left py-2 px-3 rounded text-sm capitalize transition-colors ${
@@ -77,7 +77,6 @@ const Sidebar: FC<Props> = ({
             {tab === 'dashboard' ? '🗂 Dashboard'
               : tab === 'chat' ? '💬 Chat'
               : tab === 'autopilot' ? '✈️ Auto Pilot'
-              : tab === 'editor' ? '🖥 Editor'
               : tab === 'apikeys' ? '🔑 API Keys'
               : '📄 Docs'}
           </button>

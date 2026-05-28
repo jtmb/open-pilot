@@ -459,7 +459,8 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
       for (const cmd of tokens.execCommands) {
         // Intercept git push / git remote add commands — workspace has no remote credentials.
         // GitHub push is handled automatically by the system after completion.
-        const isGitRemoteOp = /^\s*git\s+(push|remote\s+add)\b/.test(cmd);
+        // Match regardless of position in the command (e.g. inside bash -lc "... && git push ...")
+        const isGitRemoteOp = /\bgit\s+(push|remote\s+add)\b/.test(cmd);
         if (isGitRemoteOp && !currentRun.config.existingRepo) {
           const skipMsg = 'exit 0 (skipped — no remote configured)\nNote: git push is not available in this sandbox. GitHub deployment is handled automatically when the run completes.';
           updated = {
@@ -1140,6 +1141,19 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
         </span>
 
         <div className="ml-auto flex items-center gap-2">
+          {/* VS Code editor button — opens this run's workspace in code-server */}
+          <a
+            href={`${typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:8080` : 'http://localhost:8080'}/?folder=/home/coder/workspace/${run.id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open workspace in VS Code editor"
+            className="flex items-center justify-center w-7 h-7 rounded border bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 hover:border-blue-400 transition-colors"
+          >
+            <svg width="14" height="14" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+              <path fill="#007ACC" d="M74.9 5.2L39.2 33.6 15.4 18.4 4 25.1v49.8l11.4 6.7 23.8-15.2 35.7 28.4 17.1-7V12.2L74.9 5.2zm0 58.5L44.6 50l30.3-13.7V63.7zM15.4 64.5V35.5l19.2 14.5-19.2 14.5z"/>
+            </svg>
+          </a>
+
           <button
             onClick={handleExport}
             className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600"

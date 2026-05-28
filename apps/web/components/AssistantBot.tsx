@@ -4,7 +4,7 @@ import { loadAgentDefaults } from './AgentDefaults';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type TabName = 'dashboard' | 'chat' | 'docs' | 'autopilot' | 'apikeys' | 'editor';
+type TabName = 'dashboard' | 'chat' | 'docs' | 'autopilot' | 'apikeys';
 
 interface BotMessage {
   role: 'user' | 'assistant';
@@ -53,7 +53,6 @@ const TAB_NAMES: Record<TabName, string> = {
   docs:      'API Documentation',
   autopilot: 'Auto Pilot (agent runs)',
   apikeys:   'API Keys',
-  editor:    'Editor',
 };
 
 function buildSystemPrompt(activeTab: TabName): string {
@@ -83,8 +82,19 @@ Be concise. Answer in 1–4 short sentences unless the user asks for more detail
 
 const STORAGE_KEY = 'openpilot:assistant-chat';
 
+const DRAG_STORAGE_KEY = 'openpilot:assistant-drag-pos';
+
 export default function AssistantBot({ activeTab, onNavigate, onNewRun, onNewChat }: AssistantBotProps) {
   const [open, setOpen]           = useState(false);
+  const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>(() => {
+    try {
+      const raw = typeof window !== 'undefined' ? localStorage.getItem(DRAG_STORAGE_KEY) : null;
+      if (raw) return JSON.parse(raw) as { x: number; y: number };
+    } catch { /* ignore */ }
+    return { x: 0, y: 0 };
+  });
+  const draggingRef    = useRef(false);
+  const dragOriginRef  = useRef({ mx: 0, my: 0, ox: 0, oy: 0 });
   const [messages, setMessages]   = useState<BotMessage[]>(() => {
     // Hydrate from localStorage on first render
     try {
@@ -99,6 +109,37 @@ export default function AssistantBot({ activeTab, onNavigate, onNewRun, onNewCha
   const historyRef                = useRef<Array<{ role: string; content: string }>>([]);
   const bottomRef                 = useRef<HTMLDivElement>(null);
   const inputRef                  = useRef<HTMLInputElement>(null);
+
+  // Persist drag position
+  useEffect(() => {
+    try { localStorage.setItem(DRAG_STORAGE_KEY, JSON.stringify(dragOffset)); } catch { /* ignore */ }
+  }, [dragOffset]);
+
+  // Global mouse drag handlers
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!draggingRef.current) return;
+      const newX = dragOriginRef.current.ox + (e.clientX - dragOriginRef.current.mx);
+      const newY = dragOriginRef.current.oy + (e.clientY - dragOriginRef.current.my);
+      // Clamp so at least 80px stays on screen
+      const clampedX = Math.min(window.innerWidth - 80, Math.max(-(window.innerWidth - 80), newX));
+      const clampedY = Math.min(window.innerHeight - 80, Math.max(-(window.innerHeight - 80), newY));
+      setDragOffset({ x: clampedX, y: clampedY });
+    };
+    const onUp = () => { draggingRef.current = false; };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, []);
+
+  const handleDragStart = (e: React.MouseEvent) => {
+    draggingRef.current = true;
+    dragOriginRef.current = { mx: e.clientX, my: e.clientY, ox: dragOffset.x, oy: dragOffset.y };
+    e.preventDefault();
+  };
 
   // Rebuild historyRef from persisted messages on mount
   useEffect(() => {
@@ -141,7 +182,7 @@ export default function AssistantBot({ activeTab, onNavigate, onNewRun, onNewCha
     for (const action of actions) {
       if (action.type === 'nav' && action.payload) {
         const tab = action.payload as TabName;
-        const valid: TabName[] = ['dashboard', 'chat', 'docs', 'autopilot', 'apikeys', 'editor'];
+        const valid: TabName[] = ['dashboard', 'chat', 'docs', 'autopilot', 'apikeys'];
         if (valid.includes(tab)) onNavigate(tab);
       } else if (action.type === 'new_run') {
         onNewRun();
@@ -216,11 +257,12 @@ export default function AssistantBot({ activeTab, onNavigate, onNewRun, onNewCha
         onClick={() => setOpen(v => !v)}
         title="OpenPilot Assistant"
         aria-label={open ? 'Close assistant' : 'Open assistant'}
-        className={`fixed bottom-14 right-4 z-50 w-10 h-10 rounded-full shadow-lg flex items-center justify-center transition-all duration-200 select-none ${
+        className={`fixed bottom-14 right-4 z-50 w-10 h-10 rounded-full shadow-lg flex items-center justify-center transition-colors duration-200 select-none ${
           open
             ? 'bg-gray-800 border border-gray-700 shadow-md hover:bg-gray-700'
-            : 'bg-blue-600 hover:bg-blue-700 hover:scale-105'
+            : 'bg-blue-600 hover:bg-blue-700'
         }`}
+        style={{ transform: `translate(${dragOffset.x}px, ${dragOffset.y}px)` }}
       >
         {open ? (
           /* Close X */
@@ -237,13 +279,20 @@ export default function AssistantBot({ activeTab, onNavigate, onNewRun, onNewCha
 
       {/* Chat panel */}
       <div
-        className={`fixed bottom-[6.5rem] right-4 z-40 w-80 sm:w-96 bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden transition-all duration-300 ease-out ${
-          open ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 translate-y-4 pointer-events-none'
+        className={`fixed bottom-[6.5rem] right-4 z-40 w-80 sm:w-96 bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden transition-opacity duration-300 ease-out ${
+          open ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
         }`}
-        style={{ maxHeight: 'min(720px, calc(100vh - 5rem))' }}
+        style={{
+          maxHeight: 'min(720px, calc(100vh - 5rem))',
+          transform: `translate(${dragOffset.x}px, ${dragOffset.y}px) translateY(${open ? '0' : '1rem'})`,
+          transition: 'opacity 0.3s ease-out, transform 0.3s ease-out',
+        }}
       >
-        {/* Header */}
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100 dark:border-gray-700 bg-blue-600 text-white rounded-t-2xl shrink-0">
+        {/* Header — drag handle */}
+        <div
+          className="flex items-center gap-2 px-4 py-3 border-b border-gray-100 dark:border-gray-700 bg-blue-600 text-white rounded-t-2xl shrink-0 cursor-grab active:cursor-grabbing select-none"
+          onMouseDown={handleDragStart}
+        >
           <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-white shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-4 4v-4z" />
           </svg>

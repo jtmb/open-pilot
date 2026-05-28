@@ -1,39 +1,89 @@
-# Production overlay — Cloudflare Tunnel
+# Production deployment: Cloudflare Proxy → Traefik → app
 #
-# Adds a cloudflared sidecar that creates a secure public HTTPS tunnel to the
-# web container without opening any firewall ports.
+# Network flow:
+#   Browser ──HTTPS──▶ Cloudflare (CDN/WAF/proxy)
+#          ──HTTPS──▶ this server :443
+#          ──▶ Traefik (TLS termination + routing)
+#          ──HTTP──▶ web:3000
 #
-# Prerequisites
-# ─────────────
-# 1. Go to https://one.dash.cloudflare.com → Networks → Tunnels → Create a tunnel
-# 2. Choose "Cloudflared" as connector type and give the tunnel a name.
-# 3. Under Public Hostnames, add a route:
-#       Subdomain / Domain of your choice  →  http://web:3000
-# 4. Copy the tunnel token shown in the dashboard.
-# 5. Create docker/.env.prd (see docker/.env.prd.example) and paste the token.
-# 6. Update NEXTAUTH_URL in your .env to match the public hostname, e.g.:
-#       NEXTAUTH_URL=https://your-tunnel-domain.com
+# ── Cloudflare setup ────────────────────────────────────────────────────────
+#   1. Add an A record pointing your domain to this server's public IP.
+#      Enable the orange-cloud (Proxied) toggle.
+#   2. SSL/TLS → Overview → set mode to "Full" (Cloudflare <> origin is HTTPS).
+#      Use "Full (Strict)" once Let's Encrypt has issued a cert (first boot).
+#   3. (Optional) SSL/TLS → Edge Certificates → enable "Always Use HTTPS".
 #
-# Usage
-# ─────
-#   docker compose -f docker-compose.yml -f docker-compose-prd.yml up -d --build
+# ── Server setup ────────────────────────────────────────────────────────────
+#   1. Open ports 80 and 443 in your host firewall / cloud security group.
+#   2. Copy .env.prd.example → .env.prd and fill in all values.
+#   3. Pull or push your pre-built web image to a registry (see WEB_IMAGE).
+#   4. Update your GitHub OAuth App callback URL to:
+#        https://<PUBLIC_DOMAIN>/api/auth/callback/github
 #
-# To stop:
-#   docker compose -f docker-compose.yml -f docker-compose-prd.yml down
+# ── Usage ───────────────────────────────────────────────────────────────────
+#   docker compose -f docker-compose.yml -f docker-compose-prd.yml \
+#     --env-file .env.prd up -d
+#
+#   Do NOT pass --build — the web service uses a pre-built image.
+#
+# ── Upgrade web image ───────────────────────────────────────────────────────
+#   docker pull ${WEB_IMAGE}
+#   docker compose -f docker-compose.yml -f docker-compose-prd.yml \
+#     --env-file .env.prd up -d web
 
 services:
-  web:
-    # In production the web container does not need to expose port 3000 to the
-    # host — all public traffic arrives through the Cloudflare Tunnel.
-    ports: !reset []
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
+  # ── Traefik reverse proxy ──────────────────────────────────────────────────
+  traefik:
+    image: traefik:v3.3
     restart: unless-stopped
-    command: tunnel --no-autoupdate run
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
-    env_file:
-      - .env.prd
+    command:
+      # Docker provider — discovers services via labels
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      # Entrypoints
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      # Redirect all plain HTTP to HTTPS (ACME HTTP-01 challenge still passes through)
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.web.http.redirections.entrypoint.permanent=true
+      # Let's Encrypt - HTTP-01 challenge works through the Cloudflare proxy
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      # Trust Cloudflare proxy IPs so X-Forwarded-For / X-Real-IP are correct
+      - --entrypoints.web.forwardedHeaders.trustedIPs=173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22
+      - --entrypoints.websecure.forwardedHeaders.trustedIPs=173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22
+      # Disable dashboard in production
+      - --api=false
+      # Enable access log
+      - --accesslog=true
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-certs:/letsencrypt
     depends_on:
       - web
+
+  # ── Web app (pre-built image) ──────────────────────────────────────────────
+  web:
+    # Use a pre-built image — do NOT pass --build when deploying
+    image: ${WEB_IMAGE:?WEB_IMAGE must be set in .env.prd}
+    # Remove host port binding — all traffic routes through Traefik
+    ports: !reset []
+    environment:
+      - NEXTAUTH_URL=https://${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set in .env.prd}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.web.rule=Host(`${PUBLIC_DOMAIN}`)
+      - traefik.http.routers.web.entrypoints=websecure
+      - traefik.http.routers.web.tls=true
+      - traefik.http.routers.web.tls.certresolver=letsencrypt
+      - traefik.http.services.web.loadbalancer.server.port=3000
+
+volumes:
+  traefik-certs: {}
