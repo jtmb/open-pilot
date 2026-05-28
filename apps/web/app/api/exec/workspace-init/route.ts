@@ -252,9 +252,17 @@ export async function POST(req: NextRequest) {
 
   let cmd: string;
 
+  // Ensure git identity is configured in the container (required for git commit).
+  // This is a no-op if already set; safe to run on every workspace init.
+  const gitConfig = [
+    `git config --global user.email 'agent@openpilot.local'`,
+    `git config --global user.name 'OpenPilot Agent'`,
+  ].join(' && ');
+
   if (existingRepo && featureBranch) {
     // Clone the existing repo, create + publish the feature branch, then seed context files
     cmd = [
+      gitConfig,
       `git clone '${existingRepo}' '${workspaceDir}'`,
       `git -C '${workspaceDir}' checkout -b '${featureBranch}'`,
       // Attempt to publish; capture result without failing the whole command
@@ -264,6 +272,7 @@ export async function POST(req: NextRequest) {
     ].join(' && ');
   } else {
     cmd = [
+      gitConfig,
       `mkdir -p '${workspaceDir}'`,
       `printf '%b' '${agentsContent}' > '${workspaceDir}/AGENTS.md'`,
       `printf '%b' '${claudeContent}' > '${workspaceDir}/CLAUDE.md'`,

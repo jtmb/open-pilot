@@ -1,27 +1,4 @@
 services:
-  web:
-    build:
-      context: ../apps/web
-    ports:
-      - "3000:3000"
-    environment:
-      - NODE_ENV=production
-      - NEXTAUTH_URL=http://localhost:3000
-      - CODE_SERVER_URL=http://code-server:8080
-      - CODE_SERVER_BRIDGE_URL=http://code-server:3001
-      - DATABASE_URL=postgresql://openpilot:changeme@postgres:5432/openpilot
-    env_file:
-      - ../apps/web/.env
-    volumes:
-      - ../apps/web/.env:/.env
-      - /var/run/docker.sock:/var/run/docker.sock
-      - copilot-auth:/copilot-auth
-      - openpilot-data:/data
-    depends_on:
-      code-server:
-        condition: service_started
-      postgres:
-        condition: service_healthy
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -29,6 +6,8 @@ services:
       - POSTGRES_DB=openpilot
       - POSTGRES_USER=openpilot
       - POSTGRES_PASSWORD=changeme
+    ports:
+      - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -45,6 +24,7 @@ services:
       - copilot-auth:/home/coder/.local/share/code-server/User/globalStorage/github.copilot
       - ./code-server-settings.json:/home/coder/.local/share/code-server/User/settings.json:ro
       - ./copilot-bridge:/home/coder/.local/share/code-server/extensions/copilot-bridge
+      - code-server-workspace:/home/coder/workspace
     ports:
       - "8080:8080"
       - "3001:3001"
@@ -57,5 +37,6 @@ volumes:
   copilot-auth: {}
   openpilot-data: {}
   postgres-data: {}
+  code-server-workspace: {}
 
 

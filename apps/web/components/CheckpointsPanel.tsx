@@ -10,6 +10,8 @@ interface Props {
   onClose: () => void;
   /** Called after a successful restore so the parent can pause the run */
   onRestored: () => void;
+  /** Called to fully rewind workspace + agent histories to a checkpoint */
+  onRewind?: (logEntryId: string) => void;
   /** Whether checkpoint log entries are hidden in both chat panels */
   hideCheckpointLogs: boolean;
   onToggleHideCheckpointLogs: () => void;
@@ -63,12 +65,15 @@ export default function CheckpointsPanel({
   isRunning,
   onClose,
   onRestored,
+  onRewind,
   hideCheckpointLogs,
   onToggleHideCheckpointLogs,
   onSelectCheckpoint,
 }: Props) {
   // Map from checkpoint id → restore state: 'idle' | 'confirm' | 'restoring' | 'ok' | 'error:<msg>'
   const [states, setStates] = useState<Record<string, string>>({});
+  // Map from checkpoint id → rewind state: 'idle' | 'confirm' | 'rewinding'
+  const [rewindStates, setRewindStates] = useState<Record<string, string>>({});
   // Map from checkpoint id → diff state
   const [diffs, setDiffs] = useState<Record<string, DiffState>>({});
   // Which checkpoint diff is expanded (only one at a time)
@@ -140,6 +145,24 @@ export default function CheckpointsPanel({
     [runId, states, onRestored],
   );
 
+  const handleRewindClick = useCallback(
+    (cp: Checkpoint) => {
+      if (!onRewind) return;
+      const rs = rewindStates[cp.id] ?? 'idle';
+      if (rs === 'idle') {
+        setRewindStates(prev => ({ ...prev, [cp.id]: 'confirm' }));
+        setTimeout(() => {
+          setRewindStates(prev => (prev[cp.id] === 'confirm' ? { ...prev, [cp.id]: 'idle' } : prev));
+        }, 4000);
+        return;
+      }
+      if (rs !== 'confirm') return;
+      setRewindStates(prev => ({ ...prev, [cp.id]: 'rewinding' }));
+      onRewind(cp.logEntryId);
+    },
+    [onRewind, rewindStates],
+  );
+
   const sorted = [...checkpoints].reverse();
 
   return (
@@ -176,7 +199,7 @@ export default function CheckpointsPanel({
 
       {/* Restore note */}
       <div className="px-4 py-2 text-xs text-gray-500 bg-amber-50 border-b border-amber-100 shrink-0">
-        Restoring resets workspace code only — conversation history is preserved.
+        <strong>Restore</strong> resets code only. <strong>Rewind</strong> resets code + all agent histories.
       </div>
 
       {/* List */}
@@ -193,6 +216,9 @@ export default function CheckpointsPanel({
               const isOk = s === 'ok';
               const isConfirm = s === 'confirm';
               const isError = s.startsWith('error:');
+              const rs = rewindStates[cp.id] ?? 'idle';
+              const isRewindConfirm  = rs === 'confirm';
+              const isRewinding = rs === 'rewinding';
               // Ordinal based on original creation order (sorted is reversed)
               const ordinal = sorted.length - idx;
 
@@ -223,6 +249,7 @@ export default function CheckpointsPanel({
                     <button
                       disabled={isRestoring || isOk}
                       onClick={() => handleRestore(cp)}
+                      title="Reset workspace code to this point (conversation history preserved)"
                       className={[
                         'shrink-0 text-xs font-semibold px-2.5 py-1 rounded border transition-colors',
                         isConfirm
@@ -236,6 +263,24 @@ export default function CheckpointsPanel({
                     >
                       {isConfirm ? 'Confirm?' : isRestoring ? 'Restoring…' : isOk ? 'Restored' : 'Restore'}
                     </button>
+
+                    {onRewind && (
+                      <button
+                        disabled={isRewinding}
+                        onClick={() => handleRewindClick(cp)}
+                        title="Rewind workspace code AND agent histories to this point — run will pause"
+                        className={[
+                          'shrink-0 text-xs font-semibold px-2.5 py-1 rounded border transition-colors',
+                          isRewindConfirm
+                            ? 'bg-amber-500 text-white border-amber-500 hover:bg-amber-600'
+                            : isRewinding
+                            ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
+                            : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100',
+                        ].join(' ')}
+                      >
+                        {isRewindConfirm ? 'Confirm?' : isRewinding ? 'Rewinding…' : '⏪ Rewind'}
+                      </button>
+                    )}
 
                     <button
                       onClick={() => handleToggleDiff(cp)}

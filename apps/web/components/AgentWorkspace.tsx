@@ -206,6 +206,9 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
   const [deletingRepo, setDeletingRepo] = useState(false);
   const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Workspace existence — null = unknown, true/false after check
+  const [workspaceExists, setWorkspaceExists] = useState<boolean | null>(null);
+
   // Training: accumulated token counts and run-persist state
   const tokenAccumRef = useRef({ prompt: 0, completion: 0 });
   const [savedRunId, setSavedRunId]   = useState<string | null>(null);
@@ -222,6 +225,24 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
     setRun(newRun);
     onUpdate(newRun);
   }, [onUpdate]);
+
+  // Open this run's workspace in code-server, checking existence first.
+  const openCodeServerWorkspace = useCallback(async () => {
+    const r = runRef.current;
+    const base = `${window.location.protocol}//${window.location.hostname}:8080`;
+    const folderUrl = `${base}/?folder=/home/coder/workspace/${r.id}`;
+    try {
+      const res = await fetch(`/api/exec/workspace-exists?runId=${encodeURIComponent(r.id)}`);
+      const data = await res.json() as { exists?: boolean };
+      if (data.exists === false) {
+        setWorkspaceExists(false);
+        setTimeout(() => setWorkspaceExists(null), 5000);
+        return;
+      }
+    } catch { /* fall through — open anyway if check fails */ }
+    setWorkspaceExists(true);
+    window.open(folderUrl, '_blank', 'noopener,noreferrer');
+  }, []);
 
   // Auto-open the plan panel the first time the manager creates a plan
   const planLengthRef = useRef(initialRun.plan?.length ?? 0);
@@ -332,6 +353,32 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
       .then(r => r.json() as Promise<{ ok: boolean; id?: string }>)
       .then(d => { if (d.ok && d.id) setSavedRunId(d.id); })
       .catch(() => {});
+
+    // Phase 5: auto-record completed runs to AgentRunRecord for benchmarking
+    if (run.status === 'complete') {
+      fetch('/api/training/record', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          run,
+          tokenPromptTotal:     tokenAccumRef.current.prompt,
+          tokenCompletionTotal: tokenAccumRef.current.completion,
+          monitorFindings:      JSON.stringify(allFindings),
+        }),
+      })
+        .then(r => r.json() as Promise<{ ok: boolean; id?: string }>)
+        .then(d => {
+          // Auto-score the run now that the record exists
+          if (d.ok && d.id) {
+            fetch('/api/training/score', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ runId: d.id }),
+            }).catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run.status]);
 
@@ -426,6 +473,7 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
 
     // Inject monitor advisory into manager steps (appended to last user message)
     let messages = payload.messages;
+    let wsSnapshotForLog: string | null = null;
     if (!payload.isWorker && advisory) {
       const last = messages[messages.length - 1];
       messages = [
@@ -434,24 +482,144 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
       ];
     }
 
-    const res = await fetch('/api/agents/step', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        history: messages,
-        model,
-        reasoningEffort: reasoningEffort || undefined,
-      }),
-    });
+    // Phase 1A: inject workspace file listing at the start of each new task
+    // (ephemeral — not stored in history, just prepended to this LLM call)
+    if (payload.isWorker) {
+      const lastUserMsg = currentRun.workerHistory.filter(m => m.role === 'user').at(-1);
+      if (lastUserMsg?.content.startsWith('Task: ')) {
+        try {
+          const listRes = await fetch('/api/exec', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              command: 'find . -not -path \'*/node_modules/*\' -not -path \'*/.git/*\' -type f 2>/dev/null | sort | head -60',
+              runId: currentRun.id,
+            }),
+          });
+          const { output: wsOutput } = await listRes.json() as { output?: string };
+          if (wsOutput?.trim()) {
+            messages = [
+              ...messages,
+              { role: 'user' as const, content: `[Current workspace files — read before writing]\n${wsOutput.trim()}\n\nOnly create new files or modify files that need changing. Use [READ: path] to inspect an existing file before modifying it.` },
+            ];
+            wsSnapshotForLog = wsOutput.trim();
+          }
+        } catch { /* non-fatal */ }
+      }
+    }
 
-    const data = await res.json() as { reply?: string; error?: string; promptTokens?: number; completionTokens?: number };
+    // Phase 3: inject workspace git diff for manager-review steps
+    if (!payload.isWorker && currentRun.nextStep === 'manager-review') {
+      try {
+        const diffRes = await fetch('/api/exec', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            command: 'git log --oneline -3 2>/dev/null && echo "---" && git diff --stat HEAD~1 HEAD 2>/dev/null || echo "(no git history yet)"',
+            runId: currentRun.id,
+          }),
+        });
+        const { output: diffOutput } = await diffRes.json() as { output?: string };
+        if (diffOutput?.trim()) {
+          const last = messages[messages.length - 1];
+          if (last?.role === 'user') {
+            messages = [
+              ...messages.slice(0, -1),
+              { ...last, content: `[Workspace changes since last checkpoint]\n${diffOutput.trim()}\n\n${last.content}` },
+            ];
+          }
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    // ── Call the LLM with retry on transient errors ───────────────────────
+    const MAX_STEP_RETRIES = 3;
+    let data: { reply?: string; error?: string; promptTokens?: number; completionTokens?: number } = {};
+    let stepOk = false;
+    for (let attempt = 0; attempt < MAX_STEP_RETRIES; attempt++) {
+      if (attempt > 0) {
+        // Exponential backoff: 3 s, 9 s
+        await new Promise(r => setTimeout(r, 3_000 * attempt));
+      }
+      try {
+        const res = await fetch('/api/agents/step', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            history: messages,
+            model,
+            reasoningEffort: reasoningEffort || undefined,
+          }),
+        });
+        data = await res.json() as typeof data;
+        if (res.ok && data.reply) { stepOk = true; break; }
+        // Non-retryable client errors (4xx except 429/408) — bail immediately
+        if (res.status >= 400 && res.status < 500 && res.status !== 429 && res.status !== 408) break;
+        // Retryable: 5xx, 429, 408, or missing reply
+      } catch {
+        // fetch/network error — retryable
+      }
+    }
+
+    if (!stepOk) {
+      const errMsg = data.error ?? 'unknown error';
+      return {
+        ...currentRun,
+        status: 'paused' as const,
+        log: [
+          ...currentRun.log,
+          logEntry('system', 'status',
+            `⏸ API call failed after ${MAX_STEP_RETRIES} attempts — "${errMsg}". Fix the connection issue and resume.`,
+            'both'),
+        ],
+      };
+    }
+
     tokenAccumRef.current.prompt     += data.promptTokens     ?? 0;
     tokenAccumRef.current.completion += data.completionTokens ?? 0;
-    const reply = data.reply ?? `[API Error: ${data.error ?? 'unknown'}]`;
+    const reply = data.reply!;
 
-    // ── Manager step: just apply reply ──────────────────────────────────────
+    // ── Manager step ────────────────────────────────────────────────────────
     if (!payload.isWorker) {
-      return applyReply(currentRun, currentRun.nextStep!, reply);
+      let mgrUpdated = applyReply(currentRun, currentRun.nextStep!, reply);
+      const mgrTokens = parseTokens(reply);
+
+      // Phase 4: correction rate limiting
+      // Count how many corrections have been issued since the last task assignment
+      if (mgrTokens.correction) {
+        const lastTaskIdx = [...mgrUpdated.log].reverse().findIndex(e => e.type === 'task');
+        const taskStart = lastTaskIdx >= 0 ? mgrUpdated.log.length - 1 - lastTaskIdx : 0;
+        const correctionsOnTask = mgrUpdated.log.slice(taskStart).filter(e => e.type === 'correction').length;
+
+        if (correctionsOnTask >= 5) {
+          mgrUpdated = {
+            ...mgrUpdated,
+            status: 'paused',
+            log: [...mgrUpdated.log, logEntry('system', 'status',
+              `⏸ ${correctionsOnTask} corrections on this task without resolution — pausing. Inject guidance for the worker to break the loop.`,
+              'both')],
+          };
+        } else if (correctionsOnTask >= 3) {
+          // Inject a simplification nudge into the worker's next context
+          mgrUpdated = {
+            ...mgrUpdated,
+            workerHistory: [
+              ...mgrUpdated.workerHistory,
+              { role: 'user' as const, content: `[System note: ${correctionsOnTask} corrections on this task without resolution. Your previous approaches are not working. Simplify radically \u2014 implement the minimal version that satisfies core acceptance criteria only. Do not repeat the same approach.]` },
+            ],
+            log: [...mgrUpdated.log, logEntry('system', 'status',
+              `\u{1F4A1} ${correctionsOnTask} corrections on same task \u2014 simplification nudge injected into worker context`,
+              'worker')],
+          };
+        }
+      }
+
+      // Reset selfHealCount when manager assigns a new task
+      if (mgrTokens.nextTask) {
+        mgrUpdated = { ...mgrUpdated, selfHealCount: 0 };
+      }
+
+      return mgrUpdated;
     }
 
     // ── Worker step ─────────────────────────────────────────────────────────
@@ -459,6 +627,11 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
 
     // Apply reply first so history/logs are updated
     let updated = applyReply(currentRun, currentRun.nextStep!, reply);
+
+    // Emit file-context log entry for workspace snapshot (Phase 1A)
+    if (wsSnapshotForLog) {
+      updated = { ...updated, log: [...updated.log, logEntry('system', 'file-context', wsSnapshotForLog, 'worker')] };
+    }
 
     // Apply [SERVE: command] if declared — stored on the run for persistence
     if (tokens.serveCommand) {
@@ -474,6 +647,7 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
     // ── Handle [EXEC: command] tokens ────────────────────────────────────────
     if (tokens.execCommands.length > 0) {
       let filesForFirstCmd = filesThisReply; // sync files only on first command
+      let anyExecFailed = false;
       for (const cmd of tokens.execCommands) {
         // Intercept git push / git remote add commands — workspace has no remote credentials.
         // GitHub push is handled automatically by the system after completion.
@@ -519,6 +693,7 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
             : `${output ?? ''}`;
           const exitLabel = execError ? 'error' : `exit ${exitCode}`;
           const execPassed = !execError && exitCode === 0;
+          if (!execPassed) anyExecFailed = true;
 
           // Unlock preview + auto-checkpoint when any exec passes
           if (execPassed) {
@@ -548,6 +723,9 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
                   createdAt: Date.now(),
                   iteration: currentRun.currentIteration,
                   logEntryId: cpLogId,
+                  workerHistoryLen: updated.workerHistory.length,
+                  managerHistoryLen: updated.managerHistory.length,
+                  logLen: updated.log.length + 1, // +1 for the cpLogEntry we're about to add
                 };
                 updated = {
                   ...updated,
@@ -575,6 +753,7 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
             status: 'running',
           };
         } catch (err) {
+          anyExecFailed = true;
           const msg = err instanceof Error ? err.message : String(err);
           updated = {
             ...updated,
@@ -600,7 +779,65 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
           .then(d => { if (d.url) setPreviewUrl(d.url); })
           .catch(() => {});
       }
+
+      // Phase 2: self-healing — if worker said [DONE] but some commands failed,
+      // override nextStep and give it another chance to investigate and fix
+      if (anyExecFailed && tokens.done) {
+        const selfHealCount = (currentRun.selfHealCount ?? 0) + 1;
+        if (selfHealCount <= 3) {
+          updated = {
+            ...updated,
+            selfHealCount,
+            nextStep: 'worker-execute',
+            status: 'running',
+            workerHistory: [
+              ...updated.workerHistory,
+              { role: 'user' as const, content: `One or more commands failed (self-heal attempt ${selfHealCount}/3). Review the errors above, fix the root cause, and re-run the failing commands. Say [DONE] only when all commands pass.` },
+            ],
+            log: [...updated.log, logEntry('system', 'status', `⚠️ Exec failed — worker self-healing (${selfHealCount}/3)`, 'worker')],
+          };
+        } else {
+          // Escalate to manager after 3 failed attempts
+          updated = {
+            ...updated,
+            selfHealCount: 0,
+            nextStep: 'manager-review',
+            log: [...updated.log, logEntry('system', 'status', `⚠️ 3 self-heal attempts exhausted — escalating to manager for guidance`, 'worker')],
+          };
+        }
+      }
+
       return updated;
+    }
+
+    // Phase 1B: handle [READ: path] tokens — inject file content before next worker response
+    if (tokens.readPaths.length > 0) {
+      for (const rawPath of tokens.readPaths) {
+        // Security: reject paths with traversal or absolute paths
+        const safePath = rawPath.trim().replace(/\\/g, '/');
+        if (!safePath || safePath.includes('..') || safePath.startsWith('/')) continue;
+        try {
+          const readRes = await fetch('/api/exec', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              command: `cat "${safePath}" 2>/dev/null || echo "[FILE NOT FOUND: ${safePath}]"`,
+              runId: currentRun.id,
+            }),
+          });
+          const { output: fileContent } = await readRes.json() as { output?: string };
+          updated = {
+            ...updated,
+            workerHistory: [
+              ...updated.workerHistory,
+              { role: 'user' as const, content: `[READ_RESULT: ${safePath}]\n${fileContent ?? '[empty]'}` },
+            ],
+            log: [...updated.log, logEntry('system', 'file-context', `READ:${safePath}`, 'worker')],
+            nextStep: 'worker-execute',
+            status: 'running',
+          };
+        } catch { /* non-fatal */ }
+      }
     }
 
     return updated;
@@ -776,6 +1013,18 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
     setRunAndSync(paused);
   }, [setRunAndSync]);
 
+  const restartPreview = useCallback((r: AgentRun) => {
+    if (!r.previewCommand || !r.previewUnlocked) return;
+    fetch('/api/exec/serve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: r.previewCommand, runId: r.id }),
+    })
+      .then(res => res.json() as Promise<{ url?: string }>)
+      .then(d => { if (d.url) setPreviewUrl(d.url); })
+      .catch(() => {});
+  }, []);
+
   const handleResume = useCallback(() => {
     // If nextStep was cleared (e.g. by a blocked worker or manual stop), infer it
     const current = runRef.current;
@@ -785,24 +1034,30 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
       nextStep: current.nextStep ?? inferNextStep(current),
     };
     setRunAndSync(withStep);
+    // Restart preview server if this run previously had a successful build
+    restartPreview(current);
     executeLoop();
-  }, [executeLoop, setRunAndSync]);
+  }, [executeLoop, restartPreview, setRunAndSync]);
 
   // ── Auto-start preview on mount ──────────────────────────────────────────
   // If the run already has a serve command and a passing build (previewUnlocked),
   // restart the preview server — this handles page reloads and container restarts.
   useEffect(() => {
-    if (!initialRun.previewCommand || !initialRun.previewUnlocked) return;
-    fetch('/api/exec/serve', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command: initialRun.previewCommand, runId: initialRun.id }),
-    })
-      .then(r => r.json() as Promise<{ url?: string }>)
-      .then(d => { if (d.url) setPreviewUrl(d.url); })
-      .catch(() => {});
+    restartPreview(initialRun);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Restart preview when tab regains focus ───────────────────────────────
+  // If code-server restarts while the page is still loaded, the preview process
+  // is killed but React state still has previewUrl set. Re-launch on tab focus.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      restartPreview(runRef.current);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [restartPreview]);
 
   // ── Auto-resume on startup (server-restart recovery) ─────────────────────
   // If this run is in 'error' state when first mounted, it was interrupted by a
@@ -997,6 +1252,68 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
       setRunAndSync(updatedRun);
     }
   }, [setRunAndSync]);
+
+  // ── Rewind to any log entry (finds the nearest preceding checkpoint) ──────
+  const handleRewind = useCallback(async (entryId: string) => {
+    loopRef.current = false;
+    const r = runRef.current;
+
+    // Find the position of the target log entry
+    const entryIdx = r.log.findIndex(e => e.id === entryId);
+    if (entryIdx < 0) return;
+
+    // Find the latest checkpoint whose log entry sits at or before entryIdx
+    const cps = r.checkpoints ?? [];
+    let targetCp: Checkpoint | null = null;
+    let cpIdx = -1;
+    for (let i = cps.length - 1; i >= 0; i--) {
+      const cpLogIdx = r.log.findIndex(e => e.id === cps[i].logEntryId);
+      if (cpLogIdx >= 0 && cpLogIdx <= entryIdx) {
+        targetCp = cps[i];
+        cpIdx = i;
+        break;
+      }
+    }
+
+    // Restore git workspace to the checkpoint commit (non-fatal if no checkpoint)
+    if (targetCp) {
+      try {
+        await fetch('/api/exec/restore', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ runId: r.id, commitHash: targetCp.commitHash }),
+        });
+      } catch { /* non-fatal */ }
+    }
+
+    // Trim run state back to checkpoint
+    const logCutoff    = targetCp?.logLen       ?? entryIdx + 1;
+    const workerLen    = targetCp?.workerHistoryLen  ?? r.workerHistory.length;
+    const managerLen   = targetCp?.managerHistoryLen ?? r.managerHistory.length;
+    const keptCps      = targetCp ? cps.slice(0, cpIdx + 1) : cps;
+
+    // Clear monitor findings beyond this iteration
+    const keptIteration = targetCp?.iteration ?? 0;
+    setAllFindings(prev => prev.filter(f => f.iteration <= keptIteration));
+
+    const rewindNote = logEntry(
+      'system', 'status',
+      `⏪ Rewound to ${targetCp ? targetCp.name : 'this point'} — workspace and agent histories restored. Run is paused.`,
+      'both',
+    );
+
+    const rewound: AgentRun = {
+      ...r,
+      status: 'paused',
+      log: [...r.log.slice(0, logCutoff), rewindNote],
+      workerHistory:  r.workerHistory.slice(0, workerLen),
+      managerHistory: r.managerHistory.slice(0, managerLen),
+      checkpoints: keptCps,
+      selfHealCount: 0,
+      updatedAt: Date.now(),
+    };
+    setRunAndSync(rewound);
+  }, [setRunAndSync, setAllFindings]);
 
   const handleExport = useCallback(() => {
     const r = runRef.current;
@@ -1210,17 +1527,22 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
 
         <div className="ml-auto flex items-center gap-2">
           {/* VS Code editor button — opens this run's workspace in code-server */}
-          <a
-            href={`${typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:8080` : 'http://localhost:8080'}/?folder=/home/coder/workspace/${run.id}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Open workspace in VS Code editor"
-            className="flex items-center justify-center w-7 h-7 rounded border bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 hover:border-blue-400 transition-colors"
+          <button
+            onClick={openCodeServerWorkspace}
+            title={workspaceExists === false ? 'Workspace not found — restart the run to rebuild it' : 'Open workspace in VS Code editor'}
+            className={`flex items-center justify-center w-7 h-7 rounded border transition-colors ${
+              workspaceExists === false
+                ? 'bg-red-50 dark:bg-red-900/30 border-red-300 dark:border-red-600 text-red-500'
+                : 'bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 hover:border-blue-400'
+            }`}
           >
-            <svg width="14" height="14" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-              <path fill="#007ACC" d="M74.9 5.2L39.2 33.6 15.4 18.4 4 25.1v49.8l11.4 6.7 23.8-15.2 35.7 28.4 17.1-7V12.2L74.9 5.2zm0 58.5L44.6 50l30.3-13.7V63.7zM15.4 64.5V35.5l19.2 14.5-19.2 14.5z"/>
-            </svg>
-          </a>
+            {workspaceExists === false
+              ? <span className="text-xs font-bold">✕</span>
+              : <svg width="14" height="14" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                  <path fill="#007ACC" d="M74.9 5.2L39.2 33.6 15.4 18.4 4 25.1v49.8l11.4 6.7 23.8-15.2 35.7 28.4 17.1-7V12.2L74.9 5.2zm0 58.5L44.6 50l30.3-13.7V63.7zM15.4 64.5V35.5l19.2 14.5-19.2 14.5z"/>
+                </svg>
+            }
+          </button>
 
           <button
             onClick={handleExport}
@@ -1286,35 +1608,69 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
               🔒 Preview
             </button>
           )}
-          {run.previewCommand && run.previewUnlocked && !previewUrl && (
-            <button
-              onClick={() => {
-                fetch('/api/exec/serve', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ command: run.previewCommand, runId: run.id }),
-                })
-                  .then(r => r.json() as Promise<{ url?: string }>)
-                  .then(d => { if (d.url) setPreviewUrl(d.url); })
-                  .catch(() => {});
-              }}
-              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border bg-blue-600 text-white border-blue-600 hover:bg-blue-700"
-              title="Start preview server and open the app"
-            >
-              ▶ Preview
-            </button>
-          )}
-          {previewUrl && (
-            <a
-              href={previewUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border bg-green-600 text-white border-green-600 hover:bg-green-700"
-              title={`Open preview at ${previewUrl}`}
-            >
-              ↗ Open Preview
-            </a>
-          )}
+          {/* ── Preview button — always visible ───────────────────────────── */}
+          {(() => {
+            const portFromUrl = previewUrl
+              ? (() => { try { return new URL(previewUrl).port || '80'; } catch { return '4000'; } })()
+              : null;
+            const portFromCmd = (() => { const m = run.previewCommand?.match(/\b(\d{4,5})\b/); return m ? m[1] : '4000'; })();
+            const port = portFromUrl ?? portFromCmd;
+            const label = `:${port}`;
+            const isActive = !!previewUrl;
+            const canStart = !!(run.previewCommand && run.previewUnlocked && !previewUrl);
+
+            const DockerIcon = () => (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" className="shrink-0" aria-hidden="true">
+                <path d="M13.983 11.078h2.119a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.119a.185.185 0 00-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 00.186-.186V3.574a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m0 2.716h2.118a.187.187 0 00.186-.186V6.29a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.887c0 .102.082.185.185.186m-2.93 0h2.12a.186.186 0 00.184-.186V6.29a.185.185 0 00-.185-.185H8.1a.185.185 0 00-.185.185v1.887c0 .102.083.185.185.186m-2.964 0h2.119a.186.186 0 00.185-.186V6.29a.185.185 0 00-.185-.185H5.136a.186.186 0 00-.186.185v1.887c0 .102.084.185.186.186m5.893 2.715h2.118a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 00.185-.185V9.006a.185.185 0 00-.184-.186h-2.12a.186.186 0 00-.186.186v1.887c0 .102.084.185.186.185m-2.92 0h2.12a.186.186 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.185.185v1.888c0 .101.083.185.185.185M23.763 9.89c-.065-.051-.672-.51-1.954-.51-.338.001-.676.03-1.01.087-.248-1.7-1.653-2.53-1.716-2.566l-.344-.199-.226.327c-.284.438-.49.922-.612 1.43-.23.97-.09 1.882.403 2.661-.595.332-1.55.413-1.744.42H.751a.751.751 0 00-.75.748 11.376 11.376 0 00.692 4.062c.545 1.428 1.355 2.48 2.41 3.124 1.18.723 3.1 1.137 5.275 1.137.983.003 1.963-.086 2.93-.266a12.248 12.248 0 003.823-1.389c.98-.567 1.86-1.288 2.61-2.136 1.252-1.418 1.998-2.997 2.553-4.4h.221c1.372 0 2.215-.549 2.68-1.009.309-.293.55-.65.707-1.046l.098-.288Z"/>
+              </svg>
+            );
+
+            if (isActive) {
+              return (
+                <a
+                  href={previewUrl!}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded border bg-green-600 text-white border-green-600 hover:bg-green-700"
+                  title={`Open preview at ${previewUrl}`}
+                >
+                  <DockerIcon />
+                  {label}
+                </a>
+              );
+            }
+            if (canStart) {
+              return (
+                <button
+                  onClick={() => {
+                    fetch('/api/exec/serve', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ command: run.previewCommand, runId: run.id }),
+                    })
+                      .then(r => r.json() as Promise<{ url?: string }>)
+                      .then(d => { if (d.url) setPreviewUrl(d.url); })
+                      .catch(() => {});
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded border bg-blue-600 text-white border-blue-600 hover:bg-blue-700"
+                  title="Start preview server"
+                >
+                  <DockerIcon />
+                  {label}
+                </button>
+              );
+            }
+            return (
+              <button
+                disabled
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded border bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-600 border-gray-200 dark:border-gray-700 cursor-not-allowed opacity-50"
+                title="Preview available after a successful build"
+              >
+                <DockerIcon />
+                {label}
+              </button>
+            );
+          })()}
 
           {/* Monitor toggle */}
           <button
@@ -1507,9 +1863,11 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
             log={run.log}
             loading={workerLoading}
             panelTarget="worker"
+            runId={run.id}
             highlightedEntryId={highlightedEntryId}
             hideCheckpointMessages={hideCheckpointLogs}
             onClearHighlight={() => setHighlightedEntryId(null)}
+            onRewind={handleRewind}
           />
         </div>
         <div className="flex-1 overflow-hidden">
@@ -1520,6 +1878,7 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
             log={run.log}
             loading={managerLoading}
             panelTarget="manager"
+            runId={run.id}
             highlightedEntryId={highlightedEntryId}
             hideCheckpointMessages={hideCheckpointLogs}
             onClearHighlight={() => setHighlightedEntryId(null)}
@@ -1558,6 +1917,7 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
               isRunning={run.status === 'running'}
               onClose={() => setCheckpointsOpen(false)}
               onRestored={handleRestored}
+              onRewind={handleRewind}
               hideCheckpointLogs={hideCheckpointLogs}
               onToggleHideCheckpointLogs={() => setHideCheckpointLogs(v => !v)}
               onSelectCheckpoint={(logEntryId) => setHighlightedEntryId(logEntryId)}

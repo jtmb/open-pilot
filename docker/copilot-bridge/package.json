@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "engines": { "vscode": "^1.90.0" },
   "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": ["*"],
   "main": "./extension.js",
   "extensionKind": ["workspace"],
   "contributes": {}

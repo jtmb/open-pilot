@@ -70,7 +70,8 @@ export type LogEntryType =
   | 'user-input'   // user injection
   | 'exec'         // shell command requested by worker
   | 'exec-result'  // output from a shell command
-  | 'checkpoint';  // auto-saved workspace checkpoint
+  | 'checkpoint'   // auto-saved workspace checkpoint
+  | 'file-context'; // workspace file snapshot or [READ:] result injected into worker context
 
 export interface AgentMessage {
   role: 'system' | 'user' | 'assistant';
@@ -143,6 +144,11 @@ export interface Checkpoint {
   iteration: number;
   /** ID of the corresponding log entry so the panel can scroll the chat to it */
   logEntryId: string;
+  /** Conversation lengths at checkpoint time — used by rewind to restore exact state */
+  workerHistoryLen: number;
+  managerHistoryLen: number;
+  /** Length of the log array at checkpoint time */
+  logLen: number;
 }
 
 export interface AgentRun {
@@ -172,6 +178,8 @@ export interface AgentRun {
   checkpoints?: Checkpoint[];
   /** Structured task plan produced by the manager at the start of the run */
   plan?: PlanTask[];
+  /** Number of consecutive self-heal attempts on the current task (resets when a new task is assigned) */
+  selfHealCount?: number;
 }
 
 // ─── System Prompts ──────────────────────────────────────────────────────────
@@ -197,6 +205,14 @@ For each task:
    If you are creating a NEW package.json (not updating an existing one), run
    [EXEC: rm -rf node_modules package-lock.json && npm install] to avoid stale lockfile conflicts.
    All code files you output are automatically synced to your workspace before each command runs.
+   Before modifying an existing file, read it first: [READ: path/to/file]
+   The system injects the current file content before your next response so you know what's already there.
+   Example: [READ: src/app/page.tsx]
+   SCAFFOLDING TOOLS (create-next-app, create-react-app, etc.):
+   The workspace already contains AGENTS.md and CLAUDE.md. Tools like create-next-app refuse to
+   run in a non-empty directory. Always scaffold into a temp subdirectory then merge:
+   [EXEC: npx create-next-app@latest _scaffold --ts --app --use-npm --yes && cp -rn _scaffold/. . && rm -rf _scaffold]
+   Never pin the version of a scaffolding tool (e.g. create-next-app@latest, NOT create-next-app@16.2.6).
    After receiving the command output, fix any errors and run again until it passes.
    PACKAGE VERSIONS — CRITICAL RULE:
    NEVER write a package.json with exact X.Y.Z version numbers you have not verified first.
@@ -273,6 +289,8 @@ interface Tokens {
   blocked?:      string;
   serveCommand?: string;
   execCommands:  string[];
+  /** Paths requested via [READ: path] — system injects file content before next worker response */
+  readPaths:     string[];
   done:          boolean;
   complete:      boolean;
   /** Raw content of [PLAN: ...] — task list emitted by manager on first response */
@@ -317,6 +335,17 @@ export function parseTokens(text: string): Tokens {
     searchFrom = idx + 6 + cmd.length + 1; // advance past this token
   }
 
+  // Extract all [READ: path] tokens (file read requests from the worker)
+  const readPaths: string[] = [];
+  let readFrom = 0;
+  while (true) {
+    const p = grabToken(text.slice(readFrom), 'READ');
+    if (!p) break;
+    readPaths.push(p.trim());
+    const ridx = text.indexOf('[READ:', readFrom);
+    readFrom = ridx + 6 + p.length + 1;
+  }
+
   const taskDoneRaw = grabToken(text, 'TASK_DONE');
   const taskDoneNum = taskDoneRaw ? parseInt(taskDoneRaw.trim(), 10) : undefined;
 
@@ -328,6 +357,7 @@ export function parseTokens(text: string): Tokens {
     blocked:     grabToken(text, 'BLOCKED'),
     serveCommand: grabToken(text, 'SERVE'),
     execCommands,
+    readPaths,
     done:        /\[DONE\]/.test(text),
     complete:    /\[COMPLETE\]/.test(text),
     plan:        grabToken(text, 'PLAN'),

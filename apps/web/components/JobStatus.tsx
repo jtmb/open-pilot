@@ -16,7 +16,8 @@ export default function JobStatus() {
 		const interval = setInterval(() => {
 			fetch('/api/jobs/history')
 				.then(res => res.json())
-				.then(data => setJobs(data.jobs || []));
+				.then(data => setJobs(data.jobs || []))
+				.catch(() => {});
 		}, 2000);
 		return () => clearInterval(interval);
 	}, []);

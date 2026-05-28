@@ -79,6 +79,28 @@ function activate(context) {
       return;
     }
 
+    // Open file endpoint
+    // POST /open-file  { path: '/absolute/path/to/file' }
+    if (req.method === 'POST' && req.url === '/open-file') {
+      let body = '';
+      req.on('data', c => { body += c; });
+      req.on('end', async () => {
+        try {
+          const { path: filePath } = JSON.parse(body);
+          if (!filePath) return send(400, { error: 'path is required' });
+          const uri = vscode.Uri.file(filePath);
+          const doc = await vscode.workspace.openTextDocument(uri);
+          await vscode.window.showTextDocument(doc, { preview: false, preserveFocus: false });
+          log('opened file:', filePath);
+          send(200, { ok: true });
+        } catch (e) {
+          log('ERROR opening file:', e.message);
+          send(500, { error: e.message || String(e) });
+        }
+      });
+      return;
+    }
+
     send(404, { error: 'Not found' });
   });
 
