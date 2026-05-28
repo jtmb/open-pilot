@@ -212,19 +212,36 @@ export async function writeFilesToContainer(
 
 // ─── Preview server management ────────────────────────────────────────────────
 
-/** Port that preview servers must listen on inside the container. */
-export const PREVIEW_PORT = 4000;
+// Port pool: each active run gets its own port so concurrent previews don't
+// collide. Ports 4000–4019 are exposed from the code-server container.
+const PREVIEW_PORT_START = 4000;
+const PREVIEW_PORT_COUNT = 20;
 
-/** In-process PID store so we can kill the right process later. */
+const freePorts = new Set<number>(
+  Array.from({ length: PREVIEW_PORT_COUNT }, (_, i) => PREVIEW_PORT_START + i),
+);
+
+/** Maps runId → allocated preview port. */
+const runPorts = new Map<string, number>();
+
+/** Maps runId → PID of the running preview process. */
 const previewPids = new Map<string, number>();
+
+/** Returns the port allocated for the given run, if any. */
+export function getRunPort(runId: string): number | undefined {
+  return runPorts.get(runId);
+}
 
 /**
  * Start a long-running preview server inside the code-server container.
- * Kills any previous preview first (same runId or whatever is on port 4000).
+ * Each run gets a unique port from the pool so concurrent previews don't
+ * conflict. If the run already has an allocated port, that port is reused.
  *
- * @param runId    Identifier for the run (used for workspace dir + log file)
- * @param command  Shell command to run (must listen on PREVIEW_PORT)
- * @returns        The preview URL (http://localhost:4000)
+ * The worker always declares its serve command using port 4000 (per system
+ * prompt instructions). Any occurrence of "4000" in the command string is
+ * transparently replaced with the allocated port before execution.
+ *
+ * @returns The preview URL (e.g. http://localhost:4001)
  */
 export async function startPreviewServer(
   runId: string,
@@ -232,14 +249,32 @@ export async function startPreviewServer(
 ): Promise<string> {
   if (!/^[a-zA-Z0-9_\-]+$/.test(runId)) throw new Error('Invalid runId');
 
-  // Kill any running preview first
-  await stopPreviewServer(runId);
+  // Allocate (or reuse) a port for this run.
+  let port = runPorts.get(runId);
+  if (port === undefined) {
+    const next = freePorts.values().next();
+    if (next.done) throw new Error('All preview ports are in use. Try again later.');
+    port = next.value;
+    freePorts.delete(port);
+    runPorts.set(runId, port);
+  }
+
+  // Kill any previous process for this run on its assigned port.
+  await stopPreviewServer(runId, /* releasePort */ false);
+
+  // Re-register the port (stopPreviewServer may have cleared it when releasePort=false still clears the pid).
+  runPorts.set(runId, port);
+
+  // Replace any hardcoded port 4000 references in the command with the allocated port.
+  const portedCommand = port === 4000
+    ? command
+    : command.replace(/\b4000\b/g, String(port));
 
   const cwd = `${WORKSPACE_ROOT}/${runId}`;
   const logFile = `/tmp/preview-${runId}.log`;
 
-  // Run command detached; echo PID to stdout so we can capture it
-  const bgCmd = `cd '${cwd}' && nohup sh -c ${JSON.stringify(command)} > '${logFile}' 2>&1 & echo $!`;
+  // Run command detached; echo PID to stdout so we can capture it.
+  const bgCmd = `cd '${cwd}' && nohup sh -c ${JSON.stringify(portedCommand)} > '${logFile}' 2>&1 & echo $!`;
   const result = await runInContainer(bgCmd, WORKSPACE_ROOT, 10_000);
   const pid = parseInt(result.output.trim(), 10);
   if (!Number.isFinite(pid) || pid <= 0) {
@@ -247,21 +282,32 @@ export async function startPreviewServer(
   }
 
   previewPids.set(runId, pid);
-  return `http://localhost:${PREVIEW_PORT}`;
+  return `http://localhost:${port}`;
 }
 
 /**
- * Stop the preview server associated with a run.
- * Falls back to killing whatever is on PREVIEW_PORT if no stored PID.
+ * Stop the preview server for a run and optionally return its port to the pool.
+ * Pass releasePort=false when stopping before a restart (keeps the port reserved).
  */
-export async function stopPreviewServer(runId: string): Promise<void> {
+export async function stopPreviewServer(
+  runId: string,
+  releasePort = true,
+): Promise<void> {
   const pid = previewPids.get(runId);
+  const port = runPorts.get(runId);
   previewPids.delete(runId);
 
-  const killCmd = pid
-    ? `kill -9 ${pid} 2>/dev/null; kill $(lsof -ti:${PREVIEW_PORT} 2>/dev/null) 2>/dev/null; true`
-    : `kill $(lsof -ti:${PREVIEW_PORT} 2>/dev/null) 2>/dev/null; true`;
+  if (releasePort) {
+    runPorts.delete(runId);
+    if (port !== undefined) freePorts.add(port);
+  }
 
-  // Use /home/coder as CWD — workspace may not exist at stop time
+  const killCmd = pid
+    ? `kill -9 ${pid} 2>/dev/null; ${port !== undefined ? `kill $(lsof -ti:${port} 2>/dev/null) 2>/dev/null;` : ''} true`
+    : port !== undefined
+      ? `kill $(lsof -ti:${port} 2>/dev/null) 2>/dev/null; true`
+      : 'true';
+
+  // Use /home/coder as CWD — workspace may not exist at stop time.
   await runInContainer(killCmd, '/home/coder', 10_000);
 }

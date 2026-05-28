@@ -193,6 +193,11 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
   const [showPushModal, setShowPushModal] = useState(false);
   const [pushState, setPushState] = useState<{ status: 'idle' | 'pushing' | 'success' | 'error'; url?: string; message?: string }>({ status: 'idle' });
 
+  // Delete confirmation state
+  const [deletePhase, setDeletePhase] = useState<'idle' | 'confirm'>('idle');
+  const [deletingRepo, setDeletingRepo] = useState(false);
+  const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Training: accumulated token counts and run-persist state
   const tokenAccumRef = useRef({ prompt: 0, completion: 0 });
   const [savedRunId, setSavedRunId]   = useState<string | null>(null);
@@ -452,6 +457,25 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
     if (tokens.execCommands.length > 0) {
       let filesForFirstCmd = filesThisReply; // sync files only on first command
       for (const cmd of tokens.execCommands) {
+        // Intercept git push / git remote add commands — workspace has no remote credentials.
+        // GitHub push is handled automatically by the system after completion.
+        const isGitRemoteOp = /^\s*git\s+(push|remote\s+add)\b/.test(cmd);
+        if (isGitRemoteOp && !currentRun.config.existingRepo) {
+          const skipMsg = 'exit 0 (skipped — no remote configured)\nNote: git push is not available in this sandbox. GitHub deployment is handled automatically when the run completes.';
+          updated = {
+            ...updated,
+            log: [...updated.log, logEntry('system', 'exec', cmd, 'worker'), logEntry('system', 'exec-result', skipMsg, 'worker')],
+            workerHistory: [
+              ...updated.workerHistory,
+              { role: 'user' as const, content: `[EXEC_RESULT: exit_code=0]\nNote: git push/remote commands are skipped in this environment — no remote is configured. The system will push to GitHub automatically when the run completes. Continue with the remaining tasks.` },
+            ],
+            nextStep: 'worker-execute',
+            status: 'running',
+          };
+          filesForFirstCmd = [];
+          continue;
+        }
+
         // Add exec log entry
         updated = {
           ...updated,
@@ -1310,12 +1334,63 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
             </>
           )}
 
-          <button
-            onClick={onDelete}
-            className="px-3 py-1.5 text-xs font-semibold rounded border border-red-200 dark:border-red-800 text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
-          >
-            🗑 Delete
-          </button>
+          {deletePhase === 'idle' ? (
+            <button
+              onClick={() => {
+                setDeletePhase('confirm');
+                if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
+                deleteTimerRef.current = setTimeout(() => setDeletePhase('idle'), 4000);
+              }}
+              className="px-3 py-1.5 text-xs font-semibold rounded border border-red-200 dark:border-red-800 text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
+            >
+              🗑 Delete
+            </button>
+          ) : (
+            <span className="flex items-center gap-1">
+              <button
+                onClick={() => {
+                  if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
+                  setDeletePhase('idle');
+                }}
+                className="px-2.5 py-1.5 text-xs font-semibold rounded border border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
+                  setDeletePhase('idle');
+                  onDelete();
+                }}
+                className="px-2.5 py-1.5 text-xs font-semibold rounded border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
+              >
+                Run only
+              </button>
+              {pushState.url && (
+                <button
+                  disabled={deletingRepo}
+                  onClick={async () => {
+                    if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
+                    setDeletePhase('idle');
+                    setDeletingRepo(true);
+                    const accessToken = (session as any)?.accessToken as string | undefined;
+                    if (accessToken && pushState.url) {
+                      await fetch('/api/github/delete-repo', {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ repoUrl: pushState.url, accessToken }),
+                      }).catch(() => {});
+                    }
+                    setDeletingRepo(false);
+                    onDelete();
+                  }}
+                  className="px-2.5 py-1.5 text-xs font-semibold rounded border border-red-500 dark:border-red-600 bg-red-500 text-white hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {deletingRepo ? 'Deleting…' : 'Run + repo'}
+                </button>
+              )}
+            </span>
+          )}
         </div>
       </div>
 

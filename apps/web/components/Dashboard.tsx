@@ -4,6 +4,7 @@ import type { AgentRun, RunStatus } from '@/services/agentOrchestrator';
 import type { ConversationData } from './ChatBox';
 import type { CopilotModel } from './ModelSelector';
 import { multiplierLabel } from './ModelSelector';
+import { MODEL_MULTIPLIERS } from '@/utils/modelMultipliers';
 
 interface Props {
   agentRuns: AgentRun[];
@@ -108,7 +109,9 @@ export default function Dashboard({ agentRuns, conversations, onSelectRun, onSel
   // ── Billing ───────────────────────────────────────────────────────────────
   const billingRows = rankedModels.map(([modelId, count]) => {
     const meta = models.find(m => m.id === modelId);
-    const mult = meta?.multiplier ?? 1;
+    // Fall back to the static map so known-free models (e.g. gpt-5-mini) always
+    // show 0x even when the live /api/models response is unavailable or stale.
+    const mult = meta?.multiplier ?? MODEL_MULTIPLIERS[modelId] ?? 1;
     const premiumReqs = mult === 'free' ? 0 : count * (mult as number);
     return { modelId, name: meta?.name ?? modelId, count, mult, premiumReqs, cost: premiumReqs * PREMIUM_COST_USD };
   });

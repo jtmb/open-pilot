@@ -125,6 +125,8 @@ export interface AgentRun {
   previewCommand?: string;
   /** True once any [EXEC: ...] has exited with code 0 — unlocks the preview button */
   previewUnlocked?: boolean;
+  /** Port allocated for this run's preview server (assigned from the pool on first start) */
+  previewPort?: number;
   /** Git-backed workspace snapshots, auto-created after each successful exec */
   checkpoints?: Checkpoint[];
 }
@@ -154,7 +156,13 @@ For each task:
    This unlocks a live preview button for the user — include it as soon as the first successful build.
 7. End your response with [DONE] when you have completed the task (and any build/tests pass).
 8. If you are completely blocked and cannot continue, end with [BLOCKED: reason].
-9. The workspace contains AGENTS.md and CLAUDE.md. After completing each significant feature, update the **Architecture**, **Build & Run**, and **Testing** sections of AGENTS.md to reflect the current state of the project.
+   IMPORTANT: Do NOT use [BLOCKED] for git remote/push errors. This workspace has no remote
+   origin configured — git push is handled automatically by the system after the run completes.
+   Local git commands (init, add, commit, log, status, diff) work fine.
+9. Do NOT run \`git push\`, \`git remote add origin\`, or GitHub CLI (\`gh\`) commands. This
+   environment has no remote credentials. GitHub deployment is handled automatically after
+   completion. Only run local git commands (\`git init\`, \`git add\`, \`git commit\`, etc.).
+10. The workspace contains AGENTS.md and CLAUDE.md. After completing each significant feature, update the **Architecture**, **Build & Run**, and **Testing** sections of AGENTS.md to reflect the current state of the project.
 
 Write production-quality code. Never truncate or omit code.`;
 
@@ -290,6 +298,55 @@ export interface StepPayload {
   /** Complete messages array to send to the Copilot API (system + history) */
   messages: AgentMessage[];
   isWorker: boolean;
+  /** True if the history was trimmed to fit the context window */
+  wasTrimmed?: boolean;
+}
+
+// GPT-4o has a 128k token context. Reserve 8k for completion.
+// Use 3 chars/token (conservative estimate for mixed English + code).
+const PROMPT_CHAR_BUDGET = 120_000 * 3; // 360 000 chars
+
+/**
+ * Trim a messages array to fit within the model's context window.
+ *
+ * Strategy:
+ *  1. Keep messages[0] (system prompt) and messages[1] (original task/spec) always.
+ *  2. Keep the most recent KEEP_RECENT messages so the agent has immediate context.
+ *  3. Drop everything in between, inserting a single notice message.
+ *  4. If still over budget, fall back to system + trim notice + last KEEP_RECENT only.
+ */
+export function trimToContextBudget(messages: AgentMessage[]): { messages: AgentMessage[]; trimmed: boolean } {
+  const totalChars = messages.reduce((s, m) => s + m.content.length, 0);
+  if (totalChars <= PROMPT_CHAR_BUDGET) return { messages, trimmed: false };
+
+  const KEEP_RECENT = 8;
+
+  // Not enough messages to meaningfully trim — return as-is.
+  if (messages.length <= KEEP_RECENT + 2) return { messages, trimmed: false };
+
+  const head = messages.slice(0, 2); // system prompt + first user message (original task)
+  const tail = messages.slice(-KEEP_RECENT);
+  const droppedCount = messages.length - head.length - KEEP_RECENT;
+
+  const notice: AgentMessage = {
+    role: 'system',
+    content: `[${droppedCount} earlier message(s) removed to fit within the model context window. The original task and the ${KEEP_RECENT} most recent messages are preserved.]`,
+  };
+
+  const trimmed1 = [...head, notice, ...tail];
+  if (trimmed1.reduce((s, m) => s + m.content.length, 0) <= PROMPT_CHAR_BUDGET) {
+    return { messages: trimmed1, trimmed: true };
+  }
+
+  // Still over budget — keep only system prompt + trim notice + last KEEP_RECENT.
+  const notice2: AgentMessage = {
+    role: 'system',
+    content: `[Earlier conversation heavily trimmed to fit the model context window. Showing the ${KEEP_RECENT} most recent messages only.]`,
+  };
+  return {
+    messages: [messages[0], notice2, ...messages.slice(-KEEP_RECENT)],
+    trimmed: true,
+  };
 }
 
 /** Build the messages array to send for the current nextStep. */
@@ -301,10 +358,10 @@ export function getStepPayload(run: AgentRun): StepPayload | null {
   const systemContent = isWorker ? prompts.worker : prompts.manager;
   const history = isWorker ? run.workerHistory : run.managerHistory;
 
-  return {
-    messages: [{ role: 'system', content: systemContent }, ...history],
-    isWorker,
-  };
+  const raw: AgentMessage[] = [{ role: 'system', content: systemContent }, ...history];
+  const { messages, trimmed } = trimToContextBudget(raw);
+
+  return { messages, isWorker, wasTrimmed: trimmed };
 }
 
 // ─── Apply Reply ──────────────────────────────────────────────────────────────

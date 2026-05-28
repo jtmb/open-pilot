@@ -3,7 +3,7 @@
 // DELETE — stop the preview server
 
 import { NextRequest, NextResponse } from 'next/server';
-import { startPreviewServer, stopPreviewServer } from '@/services/dockerExec';
+import { startPreviewServer, stopPreviewServer, getRunPort } from '@/services/dockerExec';
 
 interface ServeRequestBody {
   command: string;
@@ -32,12 +32,13 @@ export async function POST(req: NextRequest) {
 
   try {
     await startPreviewServer(runId, command.trim());
-    // Build the preview URL relative to the host the browser is actually using,
-    // so it works whether the app is accessed via localhost, WSL, or a remote IP.
+    // Use the port actually allocated to this run (may differ from 4000 if
+    // other runs are already using lower-numbered ports in the pool).
+    const allocatedPort = getRunPort(runId) ?? 4000;
     const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? 'localhost';
     const protocol = req.headers.get('x-forwarded-proto') ?? 'http';
     const hostname = host.split(':')[0];
-    return NextResponse.json({ url: `${protocol}://${hostname}:4000` });
+    return NextResponse.json({ url: `${protocol}://${hostname}:${allocatedPort}` });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });

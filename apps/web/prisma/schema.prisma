@@ -85,3 +85,14 @@ model PersonalityVersion {
 
   @@unique([personalityId, version])
 }
+
+// ─── Active Agent Run State ──────────────────────────────────────────────────
+// Stores the full serialised AgentRun (workerHistory, managerHistory, log, etc.)
+// so runs survive browser sessions, private windows, and server restarts.
+
+model AgentRunState {
+  id        String @id
+  state     String // Full AgentRun JSON
+  createdAt BigInt
+  updatedAt BigInt
+}

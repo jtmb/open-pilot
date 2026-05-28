@@ -17,7 +17,6 @@ import AssistantBot from './AssistantBot';
 import type { AgentRun } from '@/services/agentOrchestrator';
 
 const ACTIVE_KEY       = 'openpilot_active_id';
-const RUNS_STORAGE_KEY = 'openpilot_agent_runs';
 const ACTIVE_RUN_KEY   = 'openpilot_active_run';
 const MODEL_KEY        = 'openpilot_model';
 const MODE_KEY         = 'openpilot_mode';
@@ -27,30 +26,30 @@ function makeId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
 
-function loadAgentRuns(): AgentRun[] {
-  try {
-    const raw = localStorage.getItem(RUNS_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch { return []; }
-}
-
-function saveAgentRuns(runs: AgentRun[]) {
-  localStorage.setItem(RUNS_STORAGE_KEY, JSON.stringify(runs));
-}
-
 function AppShellInner() {
   const { data: session, status: sessionStatus } = useSession();
   const [hasCredentials, setHasCredentials] = useState(false);
   const [credChecked, setCredChecked] = useState(false);
+  // Failsafe: if either the credentials fetch or the NextAuth session check
+  // hangs for any reason, force the UI to render after 6 seconds.
+  const [loadingTimedOut, setLoadingTimedOut] = useState(false);
 
   useEffect(() => {
-    fetch('/api/auth/github-credentials')
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5_000);
+    fetch('/api/auth/github-credentials', { signal: ctrl.signal })
       .then(r => r.json())
       .then((d: { hasCredentials: boolean }) => {
         setHasCredentials(d.hasCredentials);
         setCredChecked(true);
       })
-      .catch(() => setCredChecked(true));
+      .catch(() => setCredChecked(true))
+      .finally(() => clearTimeout(timer));
+  }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => setLoadingTimedOut(true), 6_000);
+    return () => clearTimeout(t);
   }, []);
 
   const [activeTab, setActiveTab] = useState<'dashboard' | 'chat' | 'docs' | 'autopilot' | 'apikeys'>('chat');
@@ -65,7 +64,7 @@ function AppShellInner() {
   // Track which conversation IDs have had full messages loaded
   const loadedRef = useRef<Set<string>>(new Set());
 
-  // Agent runs (still in localStorage — no sensitive data)
+  // Agent runs — persisted in DB
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [showNewRunModal, setShowNewRunModal] = useState(false);
@@ -74,13 +73,23 @@ function AppShellInner() {
   // ── Initial load ─────────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
-      // Load conversation list (metadata only)
-      try {
-        const res = await fetch('/api/conversations');
-        const data = await res.json() as { conversations?: ConversationData[] };
-        const list = data.conversations ?? [];
-        const storedActiveId = localStorage.getItem(ACTIVE_KEY);
+      // Helper: fetch with a 10-second timeout so a hung endpoint never blocks hydration
+      function fetchWithTimeout(url: string, opts?: RequestInit): Promise<Response> {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 10_000);
+        return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(timer));
+      }
 
+      // Load conversations and runs in parallel so neither can block the other
+      const [convsResult, runsResult] = await Promise.allSettled([
+        fetchWithTimeout('/api/conversations').then(r => r.json() as Promise<{ conversations?: ConversationData[] }>),
+        fetchWithTimeout('/api/runs').then(r => r.json() as Promise<{ runs?: AgentRun[] }>),
+      ]);
+
+      // ── Process conversations ────────────────────────────────────────────
+      if (convsResult.status === 'fulfilled') {
+        const list = convsResult.value.conversations ?? [];
+        const storedActiveId = localStorage.getItem(ACTIVE_KEY);
         if (list.length > 0) {
           setConversations(list);
           const target = list.find(c => c.id === storedActiveId) ?? list[0];
@@ -88,16 +97,16 @@ function AppShellInner() {
         } else {
           // First run — create a default conversation
           const first: ConversationData = { id: makeId(), title: 'New chat', createdAt: Date.now(), messages: [] };
-          await fetch('/api/conversations', {
+          fetch('/api/conversations', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(first),
-          });
+          }).catch(() => {});
           setConversations([first]);
           setActiveId(first.id);
           loadedRef.current.add(first.id);
         }
-      } catch {
+      } else {
         // DB not ready yet — fall back to a local placeholder
         const first: ConversationData = { id: makeId(), title: 'New chat', createdAt: Date.now(), messages: [] };
         setConversations([first]);
@@ -105,10 +114,13 @@ function AppShellInner() {
         loadedRef.current.add(first.id);
       }
 
-      // Load agent runs from localStorage.
+      // ── Process runs ─────────────────────────────────────────────────────
       // Any run still marked 'running' means the server was killed mid-execution —
       // transition it to 'error' so AgentWorkspace can auto-resume it.
-      const rawRuns = loadAgentRuns();
+      let rawRuns: AgentRun[] = [];
+      if (runsResult.status === 'fulfilled') {
+        rawRuns = runsResult.value.runs ?? [];
+      }
       const storedRuns = rawRuns.map(r => {
         if (r.status !== 'running') return r;
         return {
@@ -129,6 +141,17 @@ function AppShellInner() {
         };
       });
       setAgentRuns(storedRuns);
+      // Persist any runs that were normalised (running→error) back to DB
+      for (const r of storedRuns) {
+        const original = rawRuns.find(o => o.id === r.id);
+        if (original && original.status !== r.status) {
+          fetch(`/api/runs/${r.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(r),
+          }).catch(() => {});
+        }
+      }
       const storedRunId = localStorage.getItem(ACTIVE_RUN_KEY);
       if (storedRunId && storedRuns.find(r => r.id === storedRunId)) {
         setActiveRunId(storedRunId);
@@ -163,10 +186,7 @@ function AppShellInner() {
     if (activeId) localStorage.setItem(ACTIVE_KEY, activeId);
   }, [activeId]);
 
-  useEffect(() => {
-    if (!hydrated) return;
-    saveAgentRuns(agentRuns);
-  }, [agentRuns, hydrated]);
+  // (runs are persisted per-change in handlers below — no batch save needed)
 
   useEffect(() => {
     if (activeRunId) localStorage.setItem(ACTIVE_RUN_KEY, activeRunId);
@@ -246,10 +266,22 @@ function AppShellInner() {
     setActiveRunId(run.id);
     setShowNewRunModal(false);
     setActiveTab('autopilot');
+    // Persist to DB
+    fetch('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(run),
+    }).catch(() => {});
   }, []);
 
   const handleRunUpdate = useCallback((updated: AgentRun) => {
     setAgentRuns(prev => prev.map(r => r.id === updated.id ? updated : r));
+    // Persist to DB (fire and forget — called on every agent step)
+    fetch(`/api/runs/${updated.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated),
+    }).catch(() => {});
   }, []);
 
   const handleRunDelete = useCallback(() => {
@@ -263,8 +295,8 @@ function AppShellInner() {
       body: JSON.stringify({ runId }),
     }).catch(() => {});
 
-    // Clear persisted monitor state for this run
-    try { localStorage.removeItem(`openpilot:monitor:${runId}`); } catch { /* ignore */ }
+    // Remove from DB
+    fetch(`/api/runs/${runId}`, { method: 'DELETE' }).catch(() => {});
 
     setAgentRuns(prev => {
       const next = prev.filter(r => r.id !== runId);
@@ -280,8 +312,10 @@ function AppShellInner() {
 
   const activeConversation = conversations.find(c => c.id === activeId) ?? conversations[0];
 
-  // Show loading spinner while we check credentials and session status
-  if (!credChecked || sessionStatus === 'loading') {
+  // Show loading spinner while we check credentials and session status.
+  // The 6-second failsafe (loadingTimedOut) prevents an infinite spinner if
+  // either the credentials fetch or the NextAuth session check hangs.
+  if (!loadingTimedOut && (!credChecked || sessionStatus === 'loading')) {
     return (
       <div className="flex h-screen items-center justify-center bg-gray-950">
         <div className="text-gray-400 text-sm">Loading…</div>
@@ -311,8 +345,8 @@ function AppShellInner() {
           onNewRun={() => setShowNewRunModal(true)}
         />
 
-        <main className="flex-1 flex flex-col bg-gray-50 dark:bg-gray-900 min-w-0">
-          <header className="flex items-center justify-between px-6 py-3 border-b bg-white dark:bg-gray-900 dark:border-gray-700 shrink-0">
+        <main className="flex-1 flex flex-col bg-gray-50 dark:bg-gray-800 min-w-0">
+          <header className="flex items-center justify-between px-6 py-3 border-b bg-white dark:bg-gray-800 dark:border-gray-700 shrink-0">
             <h1 className="text-xl font-bold dark:text-white">OpenPilot for VS Code</h1>
             <div className="flex items-center gap-3">
               <ModelSelector
@@ -337,7 +371,7 @@ function AppShellInner() {
 
           <SetupCopilot />
 
-          <section className="flex-1 overflow-hidden">
+          <section className="flex-1 overflow-hidden relative">
             {activeTab === 'dashboard' && <Dashboard agentRuns={agentRuns} conversations={conversations} onSelectRun={(id) => { setActiveRunId(id); setActiveTab('autopilot'); }} onSelectConv={(id) => { setActiveId(id); setActiveTab('chat'); }} />}
             {activeTab === 'docs'      && <Documentation />}
             {activeTab === 'apikeys'   && <ApiKeysManager />}
@@ -351,25 +385,36 @@ function AppShellInner() {
                 onUpdate={handleUpdate}
               />
             )}
-            {activeTab === 'autopilot' && hydrated && (
-              (() => {
-                const activeRun = agentRuns.find(r => r.id === activeRunId);
-                if (!activeRun) return (
-                  <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-3">
-                    <span className="text-4xl">🤖</span>
-                    <p className="text-sm">No agent runs yet.</p>
-                    <button
-                      onClick={() => setShowNewRunModal(true)}
-                      className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
-                    >
-                      + New Run
-                    </button>
-                  </div>
-                );
-                return (
+
+            {/* Empty state when on autopilot tab with no valid active run */}
+            {activeTab === 'autopilot' && hydrated && !agentRuns.find(r => r.id === activeRunId) && (
+              <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-3">
+                <span className="text-4xl">🤖</span>
+                <p className="text-sm">No agent runs yet.</p>
+                <button
+                  onClick={() => setShowNewRunModal(true)}
+                  className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+                >
+                  + New Run
+                </button>
+              </div>
+            )}
+
+            {/* Agent workspaces — kept mounted for all running/error runs so execution
+                loops survive tab switches and navigation. Visible only when the user is
+                on the autopilot tab and the run is the selected one. */}
+            {hydrated && agentRuns.map(run => {
+              const isActive    = activeTab === 'autopilot' && run.id === activeRunId;
+              const keepMounted = run.status === 'running' || run.status === 'error';
+              if (!isActive && !keepMounted) return null;
+              return (
+                <div
+                  key={run.id}
+                  className={isActive ? 'absolute inset-0' : 'hidden'}
+                  aria-hidden={!isActive}
+                >
                   <AgentWorkspace
-                    key={activeRun.id}
-                    run={activeRun}
+                    run={run}
                     onUpdate={handleRunUpdate}
                     onDelete={handleRunDelete}
                     onNewPersonalityRun={(spec, title) => {
@@ -377,9 +422,9 @@ function AppShellInner() {
                       setShowNewRunModal(true);
                     }}
                   />
-                );
-              })()
-            )}
+                </div>
+              );
+            })}
           </section>
         </main>
       </div>

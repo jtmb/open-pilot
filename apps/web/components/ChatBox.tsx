@@ -186,7 +186,7 @@ export default function ChatBox({ conversation, model, mode, reasoningEffort, on
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-auto p-6 space-y-4 bg-white dark:bg-gray-900">
+      <div className="flex-1 overflow-auto p-6 space-y-4 bg-white dark:bg-gray-800">
         {conversation.messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-2">
             <span className="text-4xl">💬</span>
@@ -228,7 +228,7 @@ export default function ChatBox({ conversation, model, mode, reasoningEffort, on
 
       {/* Input */}
       <form
-        className="flex px-4 py-2.5 border-t border-gray-200 dark:border-gray-700 gap-2"
+        className="flex px-4 py-2.5 border-t border-gray-200 dark:border-gray-700 gap-2 bg-white dark:bg-gray-800"
         onSubmit={e => { e.preventDefault(); sendMessage(); }}
       >
         <textarea
