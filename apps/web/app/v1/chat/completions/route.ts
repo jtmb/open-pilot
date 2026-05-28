@@ -2,7 +2,7 @@
 // Supports streaming (stream: true), plain text, and multimodal image content.
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { getCopilotToken } from '@/services/copilotAuth';
+import { fetchWithCopilotToken } from '@/services/copilotAuth';
 import { createHash } from 'crypto';
 
 const CHAT_URL = 'https://api.githubcopilot.com/chat/completions';
@@ -146,17 +146,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Copilot token
-  let token: string;
-  try {
-    token = await getCopilotToken();
-  } catch (err) {
-    return NextResponse.json(
-      { error: { message: (err as Error).message, type: 'server_error' } },
-      { status: 500 },
-    );
-  }
-
   const copilotBody: Record<string, unknown> = {
     model:    apiKey.model,
     messages,
@@ -179,12 +168,12 @@ export async function POST(req: NextRequest) {
   if (wantStream) {
     let upstream: Response;
     try {
-      upstream = await fetch(CHAT_URL, {
+      upstream = await fetchWithCopilotToken(CHAT_URL, (t) => ({
         method:  'POST',
-        headers: { Authorization: `Bearer ${token}`, ...COPILOT_HEADERS },
+        headers: { Authorization: `Bearer ${t}`, ...COPILOT_HEADERS },
         body:    JSON.stringify(copilotBody),
         signal:  AbortSignal.timeout(120_000),
-      });
+      }));
     } catch (err) {
       return NextResponse.json(
         { error: { message: (err as Error).message, type: 'server_error' } },
@@ -214,12 +203,12 @@ export async function POST(req: NextRequest) {
 
   // ── Non-streaming ─────────────────────────────────────────────────────────
   try {
-    const res = await fetch(CHAT_URL, {
+    const res = await fetchWithCopilotToken(CHAT_URL, (t) => ({
       method:  'POST',
-      headers: { Authorization: `Bearer ${token}`, ...COPILOT_HEADERS },
+      headers: { Authorization: `Bearer ${t}`, ...COPILOT_HEADERS },
       body:    JSON.stringify(copilotBody),
       signal:  AbortSignal.timeout(120_000),
-    });
+    }));
 
     if (!res.ok) {
       const errText = await res.text();

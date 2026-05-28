@@ -118,6 +118,12 @@ export default function NewRunModal({ onStart, onClose, initialSpec, initialTitl
   // Fill with AI
   const [fillModel, setFillModel] = useState('');
   const [fillLoading, setFillLoading] = useState(false);
+  const fillAbortRef = useRef<AbortController | null>(null);
+
+  // Abort any in-flight fill request when the modal unmounts
+  useEffect(() => {
+    return () => { fillAbortRef.current?.abort(); };
+  }, []);
 
   // Track whether we've applied saved prefs so we don't overwrite them on model reload
   const prefsApplied = useRef(false);
@@ -225,6 +231,9 @@ export default function NewRunModal({ onStart, onClose, initialSpec, initialTitl
 
   const fillWithAI = async () => {
     if (!title.trim() || fillLoading) return;
+    fillAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    fillAbortRef.current = ctrl;
     setFillLoading(true);
     try {
       const prompt =
@@ -233,11 +242,12 @@ export default function NewRunModal({ onStart, onClose, initialSpec, initialTitl
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt, model: fillModel, mode: 'plan' }),
+        signal: ctrl.signal,
       });
       const data = await res.json() as { result?: string; error?: string };
       if (data.result) setSpec(data.result);
-    } catch {
-      // ignore
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') return;
     } finally {
       setFillLoading(false);
     }

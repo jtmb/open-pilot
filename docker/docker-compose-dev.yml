@@ -1,0 +1,23 @@
+# Dev overlay — runs postgres + code-server with host-accessible ports.
+# The web container is intentionally excluded so you can run it locally
+# with `npm run dev` in apps/web for fast iteration without Docker rebuilds.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose-dev.yml up -d postgres code-server
+#
+# Then in a second terminal:
+#   cd apps/web && npm run dev
+#
+# Stop backend:
+#   docker compose -f docker-compose.yml -f docker-compose-dev.yml down
+
+services:
+  # Expose postgres on localhost:5432 so the local Next.js server can reach it
+  postgres:
+    ports:
+      - "5432:5432"
+
+  # web is not started in dev mode — run it locally with npm run dev
+  web:
+    profiles:
+      - disabled

@@ -19,6 +19,13 @@ export function getOAuthToken(): string {
   return token;
 }
 
+/** Clears the cached token so the next call to getCopilotToken() forces a refresh.
+ *  Call this whenever the Copilot API returns 401 so expired tokens don't persist. */
+export function invalidateCopilotToken(): void {
+  cachedToken = null;
+  tokenExpiry = 0;
+}
+
 export async function getCopilotToken(): Promise<string> {
   if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
 
@@ -42,4 +49,28 @@ export async function getCopilotToken(): Promise<string> {
   cachedToken = data.token;
   tokenExpiry = Date.now() + ((data.refresh_in ?? 1800) - 60) * 1000;
   return cachedToken;
+}
+
+/**
+ * Fetches a URL using a cached Copilot token, automatically retrying once on
+ * 401 (token expired server-side before our local clock expired it).
+ *
+ * Usage:
+ *   const res = await fetchWithCopilotToken(CHAT_URL, (token) => ({
+ *     method: 'POST',
+ *     headers: { Authorization: `Bearer ${token}`, ... },
+ *     body: JSON.stringify(payload),
+ *   }));
+ */
+export async function fetchWithCopilotToken(
+  url: string,
+  optsFn: (token: string) => RequestInit,
+): Promise<Response> {
+  const token = await getCopilotToken();
+  const res = await fetch(url, optsFn(token));
+  if (res.status !== 401) return res;
+  // Token rejected — clear cache and retry once with a fresh token
+  invalidateCopilotToken();
+  const freshToken = await getCopilotToken();
+  return fetch(url, optsFn(freshToken));
 }

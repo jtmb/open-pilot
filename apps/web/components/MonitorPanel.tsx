@@ -54,18 +54,17 @@ interface Props {
 
 export default function MonitorPanel({ findings, isAnalyzing, models, monitorModel, onMonitorModelChange, aiEnabled, onToggleAi }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(false);
 
-  // Auto-scroll as new findings arrive
+  // Scroll to bottom: instant on initial mount (page reload), smooth on new findings
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const behavior = mountedRef.current ? 'smooth' : 'instant';
+    mountedRef.current = true;
+    bottomRef.current?.scrollIntoView({ behavior } as ScrollIntoViewOptions);
   }, [findings.length]);
 
-  // Sort: errors first, warnings next, info last — within same severity newest first
-  const sorted = [...findings].sort((a, b) => {
-    const order = { error: 0, warning: 1, info: 2 };
-    const diff = (order[a.severity] ?? 3) - (order[b.severity] ?? 3);
-    return diff !== 0 ? diff : b.iteration - a.iteration;
-  });
+  // Chronological order — newest at bottom, matching worker/manager panels
+  const sorted = [...findings].sort((a, b) => a.iteration - b.iteration);
 
   return (
     <div className="flex flex-col h-full bg-gray-50 dark:bg-gray-900">

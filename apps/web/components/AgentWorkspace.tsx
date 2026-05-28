@@ -19,6 +19,7 @@ import {
   type RunStatus,
 } from '@/services/agentOrchestrator';
 import CheckpointsPanel from './CheckpointsPanel';
+import PlanPanel from './PlanPanel';
 import GitHubPushModal from './GitHubPushModal';
 import type { ParsedFile } from '@/utils/fileParser';
 
@@ -87,7 +88,8 @@ function runClientRules(run: AgentRun): DisplayFinding[] {
       /\[NEXT_TASK:/.test(t) ||
       /\[CORRECTION:/.test(t) ||
       /\[ANSWER:/.test(t)     ||
-      /\[COMPLETE\]/.test(t);
+      /\[COMPLETE\]/.test(t)  ||
+      /\[PLAN:/.test(t);       // first-response planning token is valid
     if (!hasToken) {
       findings.push({
         id: Math.random().toString(36).slice(2),
@@ -101,10 +103,15 @@ function runClientRules(run: AgentRun): DisplayFinding[] {
   }
 
   // 4. Worker output missing [DONE]
+  // Skip the check if the response ends with [EXEC:] — [DONE] comes after the exec result.
   const lastWorkerOut = [...run.log].reverse().find(
     e => e.type === 'output' && e.from === 'worker',
   );
-  if (lastWorkerOut && !/\[DONE\]/.test(lastWorkerOut.content)) {
+  if (
+    lastWorkerOut &&
+    !/\[DONE\]/.test(lastWorkerOut.content) &&
+    !/\[EXEC:/.test(lastWorkerOut.content)
+  ) {
     findings.push({
       id: Math.random().toString(36).slice(2),
       severity: 'info',
@@ -157,6 +164,7 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
   const [injectLoading, setInjectLoading] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [checkpointsOpen, setCheckpointsOpen] = useState(false);
+  const [planOpen, setPlanOpen] = useState(false);
   const [hideCheckpointLogs, setHideCheckpointLogs] = useState(true);
   const [highlightedEntryId, setHighlightedEntryId] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -214,6 +222,16 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
     setRun(newRun);
     onUpdate(newRun);
   }, [onUpdate]);
+
+  // Auto-open the plan panel the first time the manager creates a plan
+  const planLengthRef = useRef(initialRun.plan?.length ?? 0);
+  useEffect(() => {
+    const newLen = run.plan?.length ?? 0;
+    if (newLen > 0 && planLengthRef.current === 0) {
+      setPlanOpen(true);
+    }
+    planLengthRef.current = newLen;
+  }, [run.plan?.length]);
 
   // ── Normalize stale 'running' status left over from a container/page restart ──
   useEffect(() => {
@@ -904,7 +922,7 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
       id: r.id,
       title: r.title,
       spec: r.spec,
-      status: 'idle',
+      status: 'running',
       createdAt: r.createdAt,
       updatedAt: Date.now(),
       config: r.config,
@@ -922,7 +940,8 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
       body: JSON.stringify({ runId: r.id, title: r.title, spec: r.spec, existingRepo: r.config.existingRepo, featureBranch: r.config.featureBranch }),
     }).catch(() => {});
     setRunAndSync(restarted);
-  }, [restartConfirm, setRunAndSync]);
+    executeLoop();
+  }, [restartConfirm, executeLoop, setRunAndSync]);
 
   // ── Auto-push on completion (when configured at run creation) ─────────────
   useEffect(() => {
@@ -981,6 +1000,42 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
 
   const handleExport = useCallback(() => {
     const r = runRef.current;
+
+    // ── Derived diagnostics ──────────────────────────────────────────────────
+    const execEntries    = r.log.filter(e => e.type === 'exec');
+    const resultEntries  = r.log.filter(e => e.type === 'exec-result');
+    const failedExecs    = resultEntries.filter(e =>
+      /^(exit [^0]|error)/i.test(e.content.trimStart()),
+    );
+    const corrEntries    = r.log.filter(e => e.type === 'correction');
+    const recoveries     = r.log.filter(
+      e => e.type === 'status' && /auto-recovering|no recognized token/i.test(e.content),
+    );
+
+    // ── Per-entry iteration attribution ──────────────────────────────────────
+    // Scan status entries that contain "iter N" to mark iteration boundaries.
+    const iterBoundaries: { idx: number; iter: number }[] = [];
+    r.log.forEach((e, idx) => {
+      const m = e.content.match(/\biter(?:ation)?\s+(\d+)/i);
+      if (m) iterBoundaries.push({ idx, iter: parseInt(m[1], 10) });
+    });
+    const getIter = (idx: number): number | undefined => {
+      let cur: number | undefined;
+      for (const b of iterBoundaries) {
+        if (b.idx <= idx) cur = b.iter; else break;
+      }
+      return cur;
+    };
+
+    const mapEntry = (e: typeof r.log[0], idx: number) => ({
+      time:           new Date(e.timestamp).toISOString(),
+      iter:           getIter(idx),
+      from:           e.from,
+      type:           e.type,
+      monitorAdvised: e.monitorAdvised ?? false,
+      content:        e.content,
+    });
+
     const exportData = {
       meta: {
         title:         r.title,
@@ -992,25 +1047,38 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
         workerModel:   r.config.workerModel,
         managerModel:  r.config.managerModel,
       },
+      stats: {
+        execCount:        execEntries.length,
+        failedExecCount:  failedExecs.length,
+        correctionCount:  corrEntries.length,
+        recoveryCount:    recoveries.length,
+        planTaskCount:    (r.plan ?? []).length,
+        planDoneCount:    (r.plan ?? []).filter(t => t.status === 'done').length,
+      },
+      plan: (r.plan ?? []).map(t => ({ id: t.id, title: t.title, status: t.status })),
       spec: r.spec,
       workerLog: r.log
         .filter(e => e.target === 'worker' || e.target === 'both')
-        .map(e => ({
-          time:          new Date(e.timestamp).toISOString(),
-          from:          e.from,
-          type:          e.type,
-          monitorAdvised: e.monitorAdvised ?? false,
-          content:       e.content,
-        })),
+        .map((e, _, arr) => mapEntry(e, r.log.indexOf(e))),
       managerLog: r.log
         .filter(e => e.target === 'manager' || e.target === 'both')
-        .map(e => ({
-          time:          new Date(e.timestamp).toISOString(),
-          from:          e.from,
-          type:          e.type,
-          monitorAdvised: e.monitorAdvised ?? false,
-          content:       e.content,
-        })),
+        .map((e) => mapEntry(e, r.log.indexOf(e))),
+      execSummary: execEntries.map((e) => {
+        // Find the exec-result that immediately follows this exec entry in the log
+        const execIdx = r.log.indexOf(e);
+        const result = r.log.slice(execIdx + 1).find(x => x.type === 'exec-result');
+        const firstLine = result?.content.split('\n')[0].trim() ?? '';
+        const passed = result
+          ? /^exit 0$/i.test(firstLine) || /exit_code=0/.test(firstLine)
+          : null;
+        return {
+          time:    new Date(e.timestamp).toISOString(),
+          iter:    getIter(execIdx),
+          command: e.content,
+          passed,
+          output:  result?.content.slice(0, 500) ?? null,
+        };
+      }),
       monitorFindings: allFindings.map(f => ({
         iteration: f.iteration,
         severity:  f.severity,
@@ -1168,6 +1236,27 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
             title="Browse and download files produced by the worker agent"
           >
             📁 Files
+          </button>
+
+          <button
+            onClick={() => setPlanOpen(v => !v)}
+            className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded border transition-colors ${
+              planOpen
+                ? 'bg-gray-800 text-white border-gray-800'
+                : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
+            }`}
+            title="View the manager's task plan"
+          >
+            📋 Plan
+            {(run.plan?.length ?? 0) > 0 && (
+              <span className={`ml-0.5 rounded-full px-1.5 py-px text-[10px] font-bold ${
+                run.plan!.every(t => t.status === 'done')
+                  ? 'bg-green-500 text-white'
+                  : 'bg-blue-500 text-white'
+              }`}>
+                {run.plan!.filter(t => t.status === 'done').length}/{run.plan!.length}
+              </span>
+            )}
           </button>
 
           <button
@@ -1450,6 +1539,14 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
               onToggleAi={() => setMonitorAiEnabled(v => !v)}
             />
           </div>
+        )}
+
+        {/* Plan panel — collapsible right sidebar */}
+        {planOpen && (
+          <PlanPanel
+            plan={run.plan ?? []}
+            onClose={() => setPlanOpen(false)}
+          />
         )}
 
         {/* Checkpoints panel — collapsible right sidebar */}

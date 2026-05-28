@@ -1,7 +1,7 @@
 // GET /v1/models — OpenAI-compatible model list, authenticated with opk_ API key
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { getCopilotToken } from '@/services/copilotAuth';
+import { fetchWithCopilotToken } from '@/services/copilotAuth';
 import { createHash } from 'crypto';
 
 const MODELS_URL = 'https://api.githubcopilot.com/models';
@@ -47,19 +47,9 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  let token: string;
-  try {
-    token = await getCopilotToken();
-  } catch (err) {
-    return NextResponse.json(
-      { error: { message: (err as Error).message, type: 'server_error' } },
-      { status: 500 },
-    );
-  }
-
   let res: Response;
   try {
-    res = await fetch(MODELS_URL, {
+    res = await fetchWithCopilotToken(MODELS_URL, (token) => ({
       headers: {
         Authorization:           `Bearer ${token}`,
         'User-Agent':            'GitHubCopilotChat/0.49.0',
@@ -67,7 +57,7 @@ export async function GET(req: NextRequest) {
         'editor-plugin-version': 'copilot-chat/0.49.0',
       },
       signal: AbortSignal.timeout(10_000),
-    });
+    }));
   } catch (err) {
     return NextResponse.json(
       { error: { message: (err as Error).message, type: 'server_error' } },

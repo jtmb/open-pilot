@@ -30,6 +30,7 @@ apps/web/data/
 copilot-auth/
 **/hosts.json
 **/oauth_token
+apps/web/.dev/
 
 # ─── Docker volume data (bind-mounted local dirs if used) ────────────────────
 docker/data/

@@ -1,7 +1,7 @@
 // services/codeServerAutomation.ts
 // Calls GitHub Copilot's chat completions API directly.
 
-import { getCopilotToken } from './copilotAuth';
+import { fetchWithCopilotToken } from './copilotAuth';
 
 const log = (...args: unknown[]) => console.log('[COPILOT]', ...args);
 
@@ -28,7 +28,6 @@ export async function sendToCodeServerChatBox(
   { model = 'gpt-4o', mode = 'ask', reasoningEffort, systemPrompt, history }: CopilotOptions = {},
 ): Promise<string> {
   log(`sending [model=${model} mode=${mode} effort=${reasoningEffort ?? 'default'}]:`, message.slice(0, 80));
-  const token = await getCopilotToken();
 
   const baseSystem = MODE_SYSTEM[mode] ?? '';
   const fullSystem = [baseSystem, systemPrompt].filter(Boolean).join('\n\n');
@@ -49,7 +48,7 @@ export async function sendToCodeServerChatBox(
   };
   if (reasoningEffort) body.reasoning_effort = reasoningEffort;
 
-  const res = await fetch(CHAT_URL, {
+  const res = await fetchWithCopilotToken(CHAT_URL, (token) => ({
     method: 'POST',
     headers: {
       Authorization:           `Bearer ${token}`,
@@ -62,7 +61,7 @@ export async function sendToCodeServerChatBox(
     },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(60_000),
-  });
+  }));
 
   if (!res.ok) {
     const body = await res.text();

@@ -67,8 +67,9 @@ export function extractFilesFromText(
       into.set(path, { path, language: lang || guessLang(path), content: content.trim() });
   }
 
-  // Strategy 2: path as first comment line  →  ```lang\n// src/App.tsx
-  const s2 = /```([a-zA-Z0-9_+\-]*)\n(?:\/\/\s*|#\s*|--\s*)([^\n*/\s][^\n]*)\n([\s\S]*?)```/g;
+  // Strategy 2: path as first comment line  →  ```lang\n// src/App.tsx  or  /* src/App.tsx */
+  // Handles: // path  |  # path  |  -- path  |  /* path */
+  const s2 = /```([a-zA-Z0-9_+\-]*)\n(?:\/\/\s*|#\s*|--\s*|\/\*\s*)([^\n*/\s][^\n*/]*)(?:\s*\*\/)?\n([\s\S]*?)```/g;
   while ((m = s2.exec(text)) !== null) {
     const [, lang, rawComment, content] = m;
     const candidate = rawComment.trim().split(/\s+/)[0];
@@ -83,6 +84,17 @@ export function extractFilesFromText(
   while ((m = s3.exec(text)) !== null) {
     const [, rawPath, lang, content] = m;
     const path = normalizePath(rawPath.trim().replace(/[`*_]/g, ''));
+    if (looksLikePath(path) && !into.has(path))
+      into.set(path, { path, language: lang || guessLang(path), content: content.trim() });
+  }
+
+  // Strategy 4: path as first plain-text line inside the fence  →  ```lang\npath/to/file.ext\n<content>
+  // Handles output like: ```json\npackage.json\n{ ... }```
+  // Excludes lines starting with comment characters (/, *, #, <, !) to avoid matching code comment lines.
+  const s4 = /```([a-zA-Z0-9_+\-]*)\n([^\n`\s\/*#<!][^\n]*)\n([\s\S]*?)```/g;
+  while ((m = s4.exec(text)) !== null) {
+    const [, lang, rawPath, content] = m;
+    const path = normalizePath(rawPath.trim());
     if (looksLikePath(path) && !into.has(path))
       into.set(path, { path, language: lang || guessLang(path), content: content.trim() });
   }

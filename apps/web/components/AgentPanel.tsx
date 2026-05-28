@@ -228,6 +228,7 @@ export default function AgentPanel({
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(false);
 
   const visible = log.filter(
     e =>
@@ -235,10 +236,12 @@ export default function AgentPanel({
       !(hideCheckpointMessages && e.type === 'checkpoint'),
   );
 
-  // Auto-scroll to bottom when new messages arrive (skip when a message is highlighted)
+  // Auto-scroll to bottom: instant on initial mount (page reload), smooth on new messages
   useEffect(() => {
     if (highlightedEntryId) return;
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const behavior = mountedRef.current ? 'smooth' : 'instant';
+    mountedRef.current = true;
+    bottomRef.current?.scrollIntoView({ behavior } as ScrollIntoViewOptions);
   }, [visible.length, highlightedEntryId]);
 
   // Scroll to highlighted entry when it changes

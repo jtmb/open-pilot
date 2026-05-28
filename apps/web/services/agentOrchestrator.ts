@@ -20,11 +20,31 @@ export interface PersonalityDef {
 /** All available agent personalities loaded from data/personalities.json */
 export const personalities = personalitiesData as Record<PersonalityId, PersonalityDef>;
 
+// Planning phase instructions injected into every personality's manager system prompt.
+// Kept short so it does not conflict with the personality's own token rules.
+const PLANNING_PHASE_SUFFIX = `
+
+PLANNING RULE — first response only:
+Before assigning any task, produce a numbered plan then immediately assign task 1 IN THE SAME RESPONSE:
+
+[PLAN:
+1. <one-line title>
+2. <one-line title>
+...
+]
+[NEXT_TASK: 1. <title> — <what to build + key acceptance criteria; 100–150 words max>]
+
+Both tokens MUST appear together in your first response. Never emit [PLAN:] without [NEXT_TASK:] in the same message.
+
+EXECUTION RULE — all subsequent responses:
+- Prefix each [NEXT_TASK:] with its plan number: [NEXT_TASK: 3. Add login page — ...]
+- Keep [NEXT_TASK:] concise: state what to build and acceptance criteria — NOT a step-by-step tutorial. 150 words max.`;
+
 /** Return the worker/manager system prompts for the given category. Defaults to 'developer'. */
 export function getSystemPrompts(category?: string): { worker: string; manager: string } {
   const id = (category && category in personalities ? category : 'developer') as PersonalityId;
   const p = personalities[id];
-  return { worker: p.workerSystem, manager: p.managerSystem };
+  return { worker: p.workerSystem, manager: p.managerSystem + PLANNING_PHASE_SUFFIX };
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -88,6 +108,27 @@ export interface AgentRunConfig {
   featureBranch?: string;
 }
 
+// ─── Plan / Todo ─────────────────────────────────────────────────────────────
+
+export type PlanTaskStatus = 'pending' | 'in-progress' | 'done' | 'skipped';
+
+export interface PlanTask {
+  /** 1-based task number as written in [PLAN: ...] */
+  id: number;
+  title: string;
+  status: PlanTaskStatus;
+}
+
+/** Parse a [PLAN: ...] body into a list of PlanTasks. */
+export function parsePlanContent(raw: string): PlanTask[] {
+  const tasks: PlanTask[] = [];
+  for (const line of raw.split('\n')) {
+    const m = line.trim().match(/^(\d+)\.\s+(.+)$/);
+    if (m) tasks.push({ id: parseInt(m[1], 10), title: m[2].trim(), status: 'pending' });
+  }
+  return tasks;
+}
+
 /** A snapshot of the workspace at a point in time, backed by a git commit. */
 export interface Checkpoint {
   id: string;
@@ -129,6 +170,8 @@ export interface AgentRun {
   previewPort?: number;
   /** Git-backed workspace snapshots, auto-created after each successful exec */
   checkpoints?: Checkpoint[];
+  /** Structured task plan produced by the manager at the start of the run */
+  plan?: PlanTask[];
 }
 
 // ─── System Prompts ──────────────────────────────────────────────────────────
@@ -137,10 +180,13 @@ export const WORKER_SYSTEM = `You are a skilled software engineer working autono
 
 For each task:
 1. Implement it fully with complete, working code.
-2. Show each file in a fenced code block with the file path on the first line, e.g.:
+2. Show each file in a fenced code block with the file path on the SAME LINE as the opening backticks, e.g.:
    \`\`\`typescript src/components/Navbar.tsx
    // code here
    \`\`\`
+   IMPORTANT: the path must be on the opening line, NOT on a separate line below it.
+   Correct:   \`\`\`json package.json
+   Wrong:     \`\`\`json\\n package.json
 3. Never use placeholders, TODOs, or "// implement this later" — write real, runnable code.
 4. If you have a clarifying question, include it as: [QUESTION: your question here]
 5. You have a terminal in your workspace. Use [EXEC: command] to run shell commands:
@@ -148,8 +194,17 @@ For each task:
    - Build:                 [EXEC: npm run build]
    - Run tests:             [EXEC: npm test]
    - Any shell command:     [EXEC: node -e "console.log('hi')"]
+   If you are creating a NEW package.json (not updating an existing one), run
+   [EXEC: rm -rf node_modules package-lock.json && npm install] to avoid stale lockfile conflicts.
    All code files you output are automatically synced to your workspace before each command runs.
    After receiving the command output, fix any errors and run again until it passes.
+   PACKAGE VERSIONS — CRITICAL RULE:
+   NEVER write a package.json with exact X.Y.Z version numbers you have not verified first.
+   Your training data is outdated; version numbers you "know" are often wrong or nonexistent.
+   ALWAYS use caret ranges (^major or ^major.minor) in package.json — e.g. "next": "^14",
+   "react": "^18", "zod": "^3", "tailwindcss": "^3". Do NOT write bare "14.3.0" style strings.
+   If you must pin a specific version, run this BEFORE writing package.json:
+   [EXEC: npm show <pkg> version 2>&1] to find the latest, then use ^<that version>.
 6. Once the project can be served or previewed, declare the serve command on port 4000 with:
    [SERVE: <command>]  e.g.  [SERVE: npx serve -p 4000 dist]
    Always use port 4000. Use whatever server fits the project type.
@@ -171,20 +226,27 @@ Write production-quality code. Never truncate or omit code.`;
 export const MANAGER_SYSTEM = `You are a technical project manager and senior code reviewer working with an autonomous software engineer (the worker agent).
 
 Your responsibilities:
-1. On first message: Read the specification carefully and assign the FIRST concrete task using exactly: [NEXT_TASK: detailed task description with all context the worker needs]
-2. After each worker response: Review the code against the specification.
-3. If the code meets the spec: Acknowledge briefly and assign the next task with [NEXT_TASK: ...]
+1. On first message: Read the specification carefully.
+   - Emit a numbered plan (one-line titles) and assign task 1 in the SAME response:
+     [PLAN:\n     1. title\n     2. title\n     ...]
+     [NEXT_TASK: 1. title — what to build + acceptance criteria, 100–150 words max]
+   - Both tokens MUST appear together. Never emit [PLAN:] without [NEXT_TASK:] in the same message.
+2. After each worker response: Review the output against the specification.
+3. If the code meets the spec: Acknowledge briefly and assign the next task with [NEXT_TASK: N. title — brief description]
 4. If there are issues: Request specific changes with [CORRECTION: exactly what to change and why]
 5. Answer worker questions clearly with: [ANSWER: your answer]
 6. When ALL features in the specification have been implemented and reviewed: end with [COMPLETE]
 
 Rules:
-- Assign exactly ONE task at a time — do not batch multiple features in one [NEXT_TASK]
-- Be specific: include all necessary context in [NEXT_TASK] so the worker doesn't need to ask basic questions
-- In [CORRECTION], name the exact file, function, or line that needs changing
+- Assign exactly ONE task at a time
+- Prefix each [NEXT_TASK:] with its plan number (e.g. [NEXT_TASK: 3. Build login form — ...])
+- Keep [NEXT_TASK:] concise: state what to build and acceptance criteria. Do NOT write tutorials. 150 words max.
+- In [CORRECTION], name the exact file, function, or line that needs changing. Keep [CORRECTION:] under 80 words — do not repeat working code or the full spec.
 - Do not emit [COMPLETE] until every feature in the spec is implemented and reviewed
-- CRITICAL: Every response you produce MUST end with exactly one of the tokens above. Never write a response that does not end with [NEXT_TASK:...], [CORRECTION:...], [ANSWER:...], or [COMPLETE]. Keep your analysis brief — emit the token as early as possible.
-- The workspace contains AGENTS.md with documentation. When reviewing completed tasks, verify that the worker kept AGENTS.md up to date (architecture, build, testing sections). If not, include updating it in the next [NEXT_TASK] or [CORRECTION].`;
+- CRITICAL: Every response MUST end with exactly one of: [NEXT_TASK:...], [CORRECTION:...], [ANSWER:...], or [COMPLETE]. Never write a response without one of these.
+- Keep your analysis brief — emit the token as early as possible
+- Do NOT specify exact X.Y.Z version numbers for npm packages. Describe what to install by name only (e.g. "install react-query"); let the worker pick compatible versions.
+- The workspace contains AGENTS.md. Verify the worker kept it updated; if not, include updating it in the next task or correction.`;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -213,6 +275,10 @@ interface Tokens {
   execCommands:  string[];
   done:          boolean;
   complete:      boolean;
+  /** Raw content of [PLAN: ...] — task list emitted by manager on first response */
+  plan?:         string;
+  /** Task number from [TASK_DONE: N] — manager marks a plan item complete */
+  taskDone?:     number;
 }
 
 /**
@@ -251,6 +317,9 @@ export function parseTokens(text: string): Tokens {
     searchFrom = idx + 6 + cmd.length + 1; // advance past this token
   }
 
+  const taskDoneRaw = grabToken(text, 'TASK_DONE');
+  const taskDoneNum = taskDoneRaw ? parseInt(taskDoneRaw.trim(), 10) : undefined;
+
   return {
     question:    grabToken(text, 'QUESTION'),
     answer:      grabToken(text, 'ANSWER'),
@@ -261,6 +330,8 @@ export function parseTokens(text: string): Tokens {
     execCommands,
     done:        /\[DONE\]/.test(text),
     complete:    /\[COMPLETE\]/.test(text),
+    plan:        grabToken(text, 'PLAN'),
+    taskDone:    (taskDoneNum && !isNaN(taskDoneNum)) ? taskDoneNum : undefined,
   };
 }
 
@@ -273,8 +344,8 @@ export function createAgentRun(
 ): AgentRun {
   const specMsg =
     `Here is the project specification:\n\n---\n${spec}\n---\n\n` +
-    `Please analyze the spec and assign the FIRST task to the worker using exactly: ` +
-    `[NEXT_TASK: detailed task description with all context]`;
+    `FIRST RESPONSE: Create a numbered plan (one-line titles only, max 15 tasks) and assign task 1 in the SAME response. ` +
+    `Format:\n[PLAN:\n1. title\n2. title\n...]\n[NEXT_TASK: 1. title — what to build, key acceptance criteria, 100-150 words max]`;
 
   return {
     id: makeLogId(),
@@ -380,6 +451,44 @@ export function applyReply(
   const tokens = parseTokens(reply);
   const newLog: LogEntry[] = [];
 
+  // ── Helper: update plan task statuses ────────────────────────────────────
+  function applyPlanUpdates(
+    plan: PlanTask[],
+    taskDone?: number,
+    nextTaskContent?: string,
+    complete?: boolean,
+  ): PlanTask[] {
+    let updated = [...plan];
+
+    // Mark [TASK_DONE: N] as done
+    if (taskDone !== undefined) {
+      updated = updated.map(t => t.id === taskDone ? { ...t, status: 'done' } : t);
+    }
+
+    // Detect task number from [NEXT_TASK: N. ...] prefix
+    if (nextTaskContent) {
+      const m = nextTaskContent.match(/^(\d+)[.\s]/);
+      if (m) {
+        const num = parseInt(m[1], 10);
+        updated = updated.map(t => {
+          if (t.id === num) return { ...t, status: 'in-progress' };
+          // If a previous task was in-progress and we're moving on, mark it done
+          if (t.id < num && t.status === 'in-progress') return { ...t, status: 'done' };
+          return t;
+        });
+      }
+    }
+
+    // On [COMPLETE], mark all remaining pending/in-progress tasks as done
+    if (complete) {
+      updated = updated.map(t =>
+        t.status === 'pending' || t.status === 'in-progress' ? { ...t, status: 'done' } : t,
+      );
+    }
+
+    return updated;
+  }
+
   // ── Manager responded ─────────────────────────────────────────────────────
   if (step !== 'worker-execute') {
     let newManagerHistory: AgentMessage[] = [
@@ -394,6 +503,20 @@ export function applyReply(
     let nextStep: NextStep = null;
     let newWorkerHistory = run.workerHistory;
     let status: RunStatus = 'paused';
+
+    // ── Parse [PLAN: ...] emitted on first manager response ────────────────
+    let newPlan = run.plan ?? [];
+    if (tokens.plan && newPlan.length === 0) {
+      newPlan = parsePlanContent(tokens.plan);
+      if (newPlan.length > 0) {
+        newLog.push(logEntry('manager', 'status', `📋 Plan created with ${newPlan.length} tasks`, 'both'));
+      }
+    }
+
+    // Apply [TASK_DONE: N] and status updates from [NEXT_TASK:] / [COMPLETE]
+    if (newPlan.length > 0) {
+      newPlan = applyPlanUpdates(newPlan, tokens.taskDone, tokens.nextTask, tokens.complete);
+    }
 
     if (tokens.complete) {
       newLog.push(logEntry('system', 'status', '✅ Project complete! All tasks have been built.', 'both'));
@@ -427,24 +550,40 @@ export function applyReply(
       ];
 
     } else {
-      // No recognized token — auto-recover once before giving up.
-      // Check whether the message that prompted this reply was already a recovery prompt.
+      // No recognized action token.
+      // Special case: manager emitted [PLAN:] but forgot [NEXT_TASK:] — give targeted recovery.
+      const justCreatedPlan = tokens.plan && newPlan.length > 0;
+
+      // Detect whether we already sent a recovery prompt (avoid infinite loop).
       const prevUserMsg = run.managerHistory[run.managerHistory.length - 1];
       const alreadyRecovered =
         prevUserMsg?.role === 'user' &&
-        prevUserMsg.content.startsWith('Your last response did not include');
+        (prevUserMsg.content.startsWith('Your last response did not include') ||
+         prevUserMsg.content.startsWith('You created the plan'));
 
       if (!alreadyRecovered) {
-        newLog.push(logEntry('system', 'status',
-          '⚠️ Manager reply had no recognized token — auto-recovering…', 'both'));
-        const recoveryMsg =
-          `Your last response did not include any of the required tokens.\n` +
-          `You MUST end your response with exactly one of:\n` +
-          `- [NEXT_TASK: detailed task description]\n` +
-          `- [CORRECTION: exact changes needed]\n` +
-          `- [ANSWER: your answer]  (only when replying to a worker question)\n` +
-          `- [COMPLETE]  (only when every spec feature is fully implemented)\n\n` +
-          `Please respond again now, ending with the correct token.`;
+        let recoveryMsg: string;
+        if (justCreatedPlan) {
+          // Plan was just parsed but no [NEXT_TASK:] — tell manager exactly what to emit
+          const firstTask = newPlan[0];
+          newLog.push(logEntry('system', 'status',
+            '⚠️ Plan created but no task assigned — prompting manager to assign task 1…', 'both'));
+          recoveryMsg =
+            `You created the plan but did not assign task 1. ` +
+            `Your next response must assign task 1 immediately:\n\n` +
+            `[NEXT_TASK: 1. ${firstTask?.title ?? 'first task'} — <what the worker must build, acceptance criteria, 100-150 words>]`;
+        } else {
+          newLog.push(logEntry('system', 'status',
+            '⚠️ Manager reply had no recognized token — auto-recovering…', 'both'));
+          recoveryMsg =
+            `Your last response did not include any of the required tokens.\n` +
+            `You MUST end your response with exactly one of:\n` +
+            `- [NEXT_TASK: N. task title — brief description] (assign next task from your plan)\n` +
+            `- [CORRECTION: exact changes needed]\n` +
+            `- [ANSWER: your answer]  (only when replying to a worker question)\n` +
+            `- [COMPLETE]  (only when every spec feature is fully implemented)\n\n` +
+            `Please respond again now, ending with the correct token.`;
+        }
         newManagerHistory = [...newManagerHistory, { role: 'user', content: recoveryMsg }];
         nextStep = step; // retry the exact same manager step
         status = 'running';
@@ -464,6 +603,7 @@ export function applyReply(
       currentIteration: run.currentIteration + 1,
       updatedAt: Date.now(),
       status,
+      plan: newPlan.length > 0 ? newPlan : run.plan,
     };
   }
 

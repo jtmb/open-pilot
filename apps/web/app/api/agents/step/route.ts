@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getCopilotToken } from '@/services/copilotAuth';
+import { getCopilotToken, invalidateCopilotToken } from '@/services/copilotAuth';
 import { trimToContextBudget } from '@/services/agentOrchestrator';
 
 const CHAT_URL = 'https://api.githubcopilot.com/chat/completions';
@@ -76,11 +76,19 @@ export async function POST(req: NextRequest) {
         );
       }
     } else if (!res.ok) {
-      const errBody = await res.text();
-      return NextResponse.json(
-        { error: `Copilot API ${res.status}: ${errBody.slice(0, 200)}` },
-        { status: res.status },
-      );
+      // Retry once on 401 — cached token may have expired server-side before our clock
+      if (res.status === 401) {
+        invalidateCopilotToken();
+        const freshToken = await getCopilotToken();
+        res = await callCopilot(history, model, reasoningEffort, freshToken);
+      }
+      if (!res.ok) {
+        const errBody = await res.text();
+        return NextResponse.json(
+          { error: `Copilot API ${res.status}: ${errBody.slice(0, 200)}` },
+          { status: res.status },
+        );
+      }
     }
 
     const data = await res.json() as {

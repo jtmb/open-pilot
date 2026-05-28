@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getCopilotToken } from '@/services/copilotAuth';
+import { fetchWithCopilotToken } from '@/services/copilotAuth';
 
 const CHAT_URL = 'https://api.githubcopilot.com/chat/completions';
 
@@ -61,9 +61,18 @@ export async function POST(req: NextRequest) {
       'Reply with a JSON array of findings only.',
     ].join('\n');
 
-    const token = await getCopilotToken();
+    const monitorBody = JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: MONITOR_SYSTEM },
+        { role: 'user',   content: userMsg },
+      ],
+      temperature: 0,
+      top_p:       1,
+      stream:      false,
+    });
 
-    const res = await fetch(CHAT_URL, {
+    const res = await fetchWithCopilotToken(CHAT_URL, (token) => ({
       method: 'POST',
       headers: {
         Authorization:            `Bearer ${token}`,
@@ -74,18 +83,9 @@ export async function POST(req: NextRequest) {
         'openai-intent':          'conversation-panel',
         'copilot-integration-id': 'vscode-chat',
       },
-      body: JSON.stringify({
-        model,
-        messages:    [
-          { role: 'system', content: MONITOR_SYSTEM },
-          { role: 'user',   content: userMsg },
-        ],
-        temperature: 0,
-        top_p:       1,
-        stream:      false,
-      }),
+      body: monitorBody,
       signal: AbortSignal.timeout(30_000),
-    });
+    }));
 
     if (!res.ok) {
       return NextResponse.json({ findings: [] });
