@@ -3,10 +3,10 @@ services:
     build:
       context: ../apps/web
     ports:
-      - "3002:3000"
+      - "3003:3000"
     environment:
       - NODE_ENV=production
-      - NEXTAUTH_URL=http://localhost:3002
+      - NEXTAUTH_URL=http://localhost:3003
       - CODE_SERVER_URL=http://code-server:8080
       - CODE_SERVER_BRIDGE_URL=http://code-server:3001
       - DATABASE_URL=postgresql://openpilot:changeme@postgres:5432/openpilot
@@ -40,8 +40,6 @@ services:
     build:
       context: .
       dockerfile: code-server.Dockerfile
-    environment:
-      - PASSWORD=changeme
     volumes:
       - ./:/home/coder/project
       - copilot-auth:/home/coder/.local/share/code-server/User/globalStorage/github.copilot
@@ -51,6 +49,8 @@ services:
       - "8080:8080"
       - "3001:3001"
       - "4000-4019:4000-4019"  # preview port pool (one per concurrent run)
+    environment:
+      - PASSWORD=changeme
     command: ["--auth", "password", "--port", "8080", "/home/coder/project"]
 
 volumes:

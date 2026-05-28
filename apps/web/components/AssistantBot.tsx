@@ -4,7 +4,7 @@ import { loadAgentDefaults } from './AgentDefaults';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type TabName = 'dashboard' | 'chat' | 'docs' | 'autopilot' | 'apikeys';
+type TabName = 'dashboard' | 'chat' | 'docs' | 'autopilot' | 'apikeys' | 'editor';
 
 interface BotMessage {
   role: 'user' | 'assistant';
@@ -53,6 +53,7 @@ const TAB_NAMES: Record<TabName, string> = {
   docs:      'API Documentation',
   autopilot: 'Auto Pilot (agent runs)',
   apikeys:   'API Keys',
+  editor:    'Editor',
 };
 
 function buildSystemPrompt(activeTab: TabName): string {
@@ -140,7 +141,7 @@ export default function AssistantBot({ activeTab, onNavigate, onNewRun, onNewCha
     for (const action of actions) {
       if (action.type === 'nav' && action.payload) {
         const tab = action.payload as TabName;
-        const valid: TabName[] = ['dashboard', 'chat', 'docs', 'autopilot', 'apikeys'];
+        const valid: TabName[] = ['dashboard', 'chat', 'docs', 'autopilot', 'apikeys', 'editor'];
         if (valid.includes(tab)) onNavigate(tab);
       } else if (action.type === 'new_run') {
         onNewRun();
