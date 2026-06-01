@@ -7,7 +7,7 @@ import Dashboard from './Dashboard';
 import ApiKeysManager from './ApiKeysManager';
 import ChatBox, { type ConversationData } from './ChatBox';
 import Documentation from './Documentation';
-import ModelSelector, { type Mode, type CopilotModel } from './ModelSelector';
+import { type Mode, type CopilotModel } from './ModelSelector';
 import JobStatus from './JobStatus';
 import AuthUI from './AuthUI';
 import SetupCopilot from './SetupCopilot';
@@ -69,6 +69,24 @@ function AppShellInner() {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [showNewRunModal, setShowNewRunModal] = useState(false);
   const [newRunPrefill, setNewRunPrefill] = useState<{ spec?: string; title?: string } | null>(null);
+
+  // ── Backend health status ─────────────────────────────────────────────────
+  const [backendStatus, setBackendStatus] = useState<{ db: boolean; codeServer: boolean } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    async function check() {
+      try {
+        const res = await fetch('/api/health/services', { signal: AbortSignal.timeout(5_000) });
+        const data = await res.json() as { db: boolean; codeServer: boolean };
+        if (!cancelled) setBackendStatus({ db: !!data.db, codeServer: !!data.codeServer });
+      } catch {
+        if (!cancelled) setBackendStatus({ db: false, codeServer: false });
+      }
+    }
+    check();
+    const interval = setInterval(check, 30_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
 
   // ── Initial load ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -343,33 +361,39 @@ function AppShellInner() {
           activeRunId={activeRunId}
           onSelectRun={(id) => { setActiveRunId(id); setActiveTab('autopilot'); }}
           onNewRun={() => setShowNewRunModal(true)}
+          backendStatus={backendStatus}
         />
 
         <main className="flex-1 flex flex-col bg-gray-50 dark:bg-gray-800 min-w-0">
           <header className="flex items-center justify-between px-6 py-3 border-b bg-white dark:bg-gray-800 dark:border-gray-700 shrink-0">
             <h1 className="text-xl font-bold dark:text-white">OpenPilot for VS Code</h1>
             <div className="flex items-center gap-3">
-              <ModelSelector
-                model={model}
-                mode={mode}
-                reasoningEffort={reasoningEffort}
-                onModelChange={(id: string, meta: CopilotModel | undefined) => {
-                  setModel(id);
-                  if (meta?.reasoningEffort.length) {
-                    setReasoningEffort(meta.reasoningEffort.includes('medium') ? 'medium' : meta.reasoningEffort[0]);
-                  } else {
-                    setReasoningEffort('');
-                  }
-                }}
-                onModeChange={setMode}
-                onReasoningEffortChange={setReasoningEffort}
-              />
               <JobStatus />
               <AuthUI />
             </div>
           </header>
 
           <SetupCopilot />
+
+          {/* ── Backend offline banner ─────────────────────────────────────── */}
+          {backendStatus && (!backendStatus.db || !backendStatus.codeServer) && (() => {
+            const issues: string[] = [];
+            if (!backendStatus.db)          issues.push('database');
+            if (!backendStatus.codeServer)  issues.push('code-server container');
+            const affected = [
+              !backendStatus.db ? 'Chat, API Keys and Auto Pilot' : null,
+              !backendStatus.codeServer && backendStatus.db ? 'Auto Pilot' : null,
+            ].filter(Boolean).join(', ');
+            return (
+              <div className="shrink-0 flex items-center gap-3 px-4 py-2 bg-red-600 text-white text-xs">
+                <span className="text-base">⚠️</span>
+                <span>
+                  <strong>Backend unreachable:</strong> {issues.join(' and ')} {issues.length > 1 ? 'are' : 'is'} offline.
+                  {affected && <> {affected} {affected.includes(',') ? 'are' : 'is'} disabled until the connection is restored.</>}
+                </span>
+              </div>
+            );
+          })()}
 
           <section className="flex-1 overflow-hidden relative">
             {activeTab === 'dashboard' && <Dashboard agentRuns={agentRuns} conversations={conversations} onSelectRun={(id) => { setActiveRunId(id); setActiveTab('autopilot'); }} onSelectConv={(id) => { setActiveId(id); setActiveTab('chat'); }} />}
@@ -384,6 +408,16 @@ function AppShellInner() {
                 mode={mode}
                 reasoningEffort={reasoningEffort}
                 onUpdate={handleUpdate}
+                onModelChange={(id: string, meta: CopilotModel | undefined) => {
+                  setModel(id);
+                  if (meta?.reasoningEffort.length) {
+                    setReasoningEffort(meta.reasoningEffort.includes('medium') ? 'medium' : meta.reasoningEffort[0]);
+                  } else {
+                    setReasoningEffort('');
+                  }
+                }}
+                onModeChange={setMode}
+                onReasoningEffortChange={setReasoningEffort}
               />
             )}
 

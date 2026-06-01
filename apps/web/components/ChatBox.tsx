@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import type { Mode } from './ModelSelector';
+import ModelSelector, { type Mode, type CopilotModel } from './ModelSelector';
 import { personalities, type PersonalityDef, type PersonalityId } from '@/services/agentOrchestrator';
 import { loadAgentDefaults } from './AgentDefaults';
 
@@ -67,9 +67,12 @@ interface Props {
   mode: Mode;
   reasoningEffort: string;
   onUpdate: (updated: ConversationData) => void;
+  onModelChange?: (id: string, meta: CopilotModel | undefined) => void;
+  onModeChange?: (mode: Mode) => void;
+  onReasoningEffortChange?: (effort: string) => void;
 }
 
-export default function ChatBox({ conversation, model, mode, reasoningEffort, onUpdate }: Props) {
+export default function ChatBox({ conversation, model, mode, reasoningEffort, onUpdate, onModelChange, onModeChange, onReasoningEffortChange }: Props) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>('approvals');
@@ -248,10 +251,23 @@ export default function ChatBox({ conversation, model, mode, reasoningEffort, on
     <div className="flex flex-col h-full">
       {/* Badge bar — model / mode / personality / approval mode */}
       <div className="flex items-center gap-2 px-4 py-2 border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400 flex-wrap">
-        <span className="bg-gray-200 dark:bg-gray-700 rounded px-2 py-0.5">{model}</span>
-        <span className="bg-gray-200 dark:bg-gray-700 rounded px-2 py-0.5 capitalize">{mode}</span>
-        {reasoningEffort && (
-          <span className="bg-purple-100 text-purple-700 rounded px-2 py-0.5 capitalize">🧠 {reasoningEffort}</span>
+        {onModelChange && onModeChange && onReasoningEffortChange ? (
+          <ModelSelector
+            model={model}
+            mode={mode}
+            reasoningEffort={reasoningEffort}
+            onModelChange={onModelChange}
+            onModeChange={onModeChange}
+            onReasoningEffortChange={onReasoningEffortChange}
+          />
+        ) : (
+          <>
+            <span className="bg-gray-200 dark:bg-gray-700 rounded px-2 py-0.5">{model}</span>
+            <span className="bg-gray-200 dark:bg-gray-700 rounded px-2 py-0.5 capitalize">{mode}</span>
+            {reasoningEffort && (
+              <span className="bg-purple-100 text-purple-700 rounded px-2 py-0.5 capitalize">🧠 {reasoningEffort}</span>
+            )}
+          </>
         )}
         {/* Personality picker */}
         <select

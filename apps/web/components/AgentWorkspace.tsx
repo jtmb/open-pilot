@@ -592,11 +592,16 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
         const correctionsOnTask = mgrUpdated.log.slice(taskStart).filter(e => e.type === 'correction').length;
 
         if (correctionsOnTask >= 5) {
+          // Instead of a hard pause, inject a strong directive to the manager to change strategy
           mgrUpdated = {
             ...mgrUpdated,
-            status: 'paused',
+            status: 'running',
+            managerHistory: [
+              ...mgrUpdated.managerHistory,
+              { role: 'user' as const, content: `[System: ${correctionsOnTask} corrections issued on this task without resolution. The current approach is not working. You MUST either: (1) issue a [CORRECTION:] with a completely different, simpler approach that avoids the root failure, or (2) skip this sub-task and issue [NEXT_TASK:] to move forward. Do NOT repeat prior instructions.]` },
+            ],
             log: [...mgrUpdated.log, logEntry('system', 'status',
-              `⏸ ${correctionsOnTask} corrections on this task without resolution — pausing. Inject guidance for the worker to break the loop.`,
+              `⚠️ ${correctionsOnTask} corrections without resolution — manager redirected to change strategy`,
               'both')],
           };
         } else if (correctionsOnTask >= 3) {
@@ -781,10 +786,16 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
       }
 
       // Phase 2: self-healing — if worker said [DONE] but some commands failed,
-      // override nextStep and give it another chance to investigate and fix
+      // give it ONE more attempt then immediately escalate to manager for guidance.
       if (anyExecFailed && tokens.done) {
         const selfHealCount = (currentRun.selfHealCount ?? 0) + 1;
-        if (selfHealCount <= 3) {
+        if (selfHealCount <= 1) {
+          // Collect the most recent exec failure output to give the worker context
+          const recentFailures = updated.log
+            .slice(-10)
+            .filter(e => e.type === 'exec-result' && /^exit [^0]|^error/.test(e.content))
+            .map(e => e.content.slice(0, 300))
+            .join('\n---\n');
           updated = {
             ...updated,
             selfHealCount,
@@ -792,17 +803,28 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
             status: 'running',
             workerHistory: [
               ...updated.workerHistory,
-              { role: 'user' as const, content: `One or more commands failed (self-heal attempt ${selfHealCount}/3). Review the errors above, fix the root cause, and re-run the failing commands. Say [DONE] only when all commands pass.` },
+              { role: 'user' as const, content: `One or more commands failed (self-heal attempt ${selfHealCount}/2). Review the errors, fix the root cause, and re-run only the failing commands.\n\nFailed output:\n${recentFailures || '(see above)'}\n\nSay [DONE] only when all commands pass.` },
             ],
-            log: [...updated.log, logEntry('system', 'status', `⚠️ Exec failed — worker self-healing (${selfHealCount}/3)`, 'worker')],
+            log: [...updated.log, logEntry('system', 'status', `⚠️ Exec failed — worker self-healing (${selfHealCount}/2)`, 'worker')],
           };
         } else {
-          // Escalate to manager after 3 failed attempts
+          // After 2 failed self-heal attempts, escalate to manager for targeted guidance
+          const recentFailures = updated.log
+            .slice(-12)
+            .filter(e => e.type === 'exec-result' && /^exit [^0]|^error/.test(e.content))
+            .map(e => e.content.slice(0, 400))
+            .join('\n---\n');
           updated = {
             ...updated,
             selfHealCount: 0,
             nextStep: 'manager-review',
-            log: [...updated.log, logEntry('system', 'status', `⚠️ 3 self-heal attempts exhausted — escalating to manager for guidance`, 'worker')],
+            status: 'running',
+            // Prepend failure context into manager's incoming message
+            managerHistory: [
+              ...updated.managerHistory,
+              { role: 'user' as const, content: `[System: Worker exhausted 2 self-heal attempts. The following commands failed repeatedly:\n${recentFailures || '(see worker log)'}\nPlease analyse the errors and issue a [CORRECTION:] with a specific alternative approach. Do NOT repeat the same instructions.]` },
+            ],
+            log: [...updated.log, logEntry('system', 'status', `⚠️ 2 self-heal attempts exhausted — escalating to manager for guidance`, 'both')],
           };
         }
       }
@@ -1025,9 +1047,47 @@ export default function AgentWorkspace({ run: initialRun, onUpdate, onDelete, on
       .catch(() => {});
   }, []);
 
-  const handleResume = useCallback(() => {
-    // If nextStep was cleared (e.g. by a blocked worker or manual stop), infer it
+  const handleResume = useCallback(async () => {
     const current = runRef.current;
+
+    // ── Pre-flight: verify DB, code-server, and workspace are reachable ──
+    try {
+      const res = await fetch(
+        `/api/health/services?runId=${encodeURIComponent(current.id)}`,
+      );
+      const health = await res.json() as {
+        ok: boolean;
+        db: boolean;
+        codeServer: boolean;
+        workspace: boolean | null;
+      };
+
+      if (!health.ok) {
+        const reasons: string[] = [];
+        if (!health.db)                    reasons.push('database is not reachable');
+        if (!health.codeServer)            reasons.push('code-server container is not running');
+        if (health.workspace === false)    reasons.push('workspace directory not found — restart the run to rebuild it');
+
+        setRunAndSync({
+          ...current,
+          status: 'paused',
+          log: [
+            ...current.log,
+            logEntry(
+              'system', 'status',
+              `⚠️ Cannot resume: ${reasons.join('; ')}. Fix the issue and try again.`,
+              'both',
+            ),
+          ],
+          updatedAt: Date.now(),
+        });
+        return;
+      }
+    } catch {
+      // Health check itself failed (e.g. dev server not yet ready) — proceed anyway
+    }
+
+    // If nextStep was cleared (e.g. by a blocked worker or manual stop), infer it
     const withStep: AgentRun = {
       ...current,
       status: 'running',

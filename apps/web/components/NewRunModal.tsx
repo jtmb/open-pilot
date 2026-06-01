@@ -438,14 +438,25 @@ export default function NewRunModal({ onStart, onClose, initialSpec, initialTitl
                 </button>
               </div>
             </div>
-            <textarea
-              className="w-full border rounded px-3 py-2 text-sm font-mono resize-y"
-              placeholder={personalities[category]?.specPlaceholder ?? 'Describe what you want built. Be specific: features, tech stack, file structure, constraints…'}
-              value={spec}
-              onChange={e => setSpec(e.target.value)}
-              rows={7}
-              required
-            />
+            <div className="relative">
+              <textarea
+                className={`w-full border rounded px-3 py-2 text-sm font-mono resize-y transition-opacity ${fillLoading ? 'opacity-40 cursor-not-allowed' : ''}`}
+                placeholder={personalities[category]?.specPlaceholder ?? 'Describe what you want built. Be specific: features, tech stack, file structure, constraints…'}
+                value={spec}
+                onChange={e => setSpec(e.target.value)}
+                rows={7}
+                required
+                disabled={fillLoading}
+              />
+              {fillLoading && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <svg className="animate-spin h-6 w-6 text-purple-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Agent config */}

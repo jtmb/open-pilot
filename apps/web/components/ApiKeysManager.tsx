@@ -197,9 +197,12 @@ export default function ApiKeysManager() {
                 value={newModel}
                 onChange={e => setNewModel(e.target.value)}
               >
+                <option value="auto">Auto (Copilot billing)</option>
                 {models.length > 0
-                  ? models.map(m => <option key={m.id} value={m.id}>{m.name} ({multiplierLabel(m.multiplier)})</option>)
-                  : <option value={newModel}>{newModel}</option>}
+                  ? models
+                    .filter(m => m.id !== 'auto')
+                    .map(m => <option key={m.id} value={m.id}>{m.name} ({multiplierLabel(m.multiplier)})</option>)
+                  : (newModel !== 'auto' ? <option value={newModel}>{newModel}</option> : null)}
               </select>
             </div>
           </div>
@@ -287,9 +290,12 @@ export default function ApiKeysManager() {
                     onChange={e => handleModelChange(key, e.target.value)}
                     title="Model used for this key"
                   >
+                    <option value="auto">Auto (Copilot billing)</option>
                     {models.length > 0
-                      ? models.map(m => <option key={m.id} value={m.id}>{m.name} ({multiplierLabel(m.multiplier)})</option>)
-                      : <option value={key.model}>{key.model}</option>}
+                      ? models
+                        .filter(m => m.id !== 'auto')
+                        .map(m => <option key={m.id} value={m.id}>{m.name} ({multiplierLabel(m.multiplier)})</option>)
+                      : (key.model !== 'auto' ? <option value={key.model}>{key.model}</option> : null)}
                   </select>
                   <button
                     onClick={() => handleToggle(key)}

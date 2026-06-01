@@ -6,6 +6,12 @@ import { fetchWithCopilotToken } from '@/services/copilotAuth';
 import { createHash } from 'crypto';
 
 const CHAT_URL = 'https://api.githubcopilot.com/chat/completions';
+const AUTO_MODEL_FALLBACK = process.env.COPILOT_AUTO_MODEL_FALLBACK ?? 'gpt-4o-mini';
+const AUTO_MODEL_CHAIN = (process.env.COPILOT_AUTO_MODEL_CHAIN ??
+  'gpt-5-mini,gpt-4.1,gpt-4o-mini,gpt-4o,gpt-4.1-mini,gpt-3.5-turbo')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
 
 const COPILOT_HEADERS = {
   'Content-Type':           'application/json',
@@ -18,6 +24,24 @@ const COPILOT_HEADERS = {
 
 function hashKey(raw: string): string {
   return createHash('sha256').update(raw).digest('hex');
+}
+
+function shouldAutoRetry(status: number, body: string): boolean {
+  if (status === 429) return true;
+  if (status === 403 && /(quota|limit|billing|premium|exhausted|rate)/i.test(body)) return true;
+  if (status === 400 && /(model_not_supported|requested model is not supported)/i.test(body)) return true;
+  return false;
+}
+
+function uniqueModels(list: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const m of list) {
+    if (!m || seen.has(m)) continue;
+    seen.add(m);
+    out.push(m);
+  }
+  return out;
 }
 
 // ── Content sanitisation ──────────────────────────────────────────────────
@@ -85,6 +109,10 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // `auto` is an OpenPilot-facing pseudo-model for Copilot billing mode.
+  // Upstream Copilot chat/completions requires a concrete model identifier.
+  const upstreamModel = apiKey.model === 'auto' ? AUTO_MODEL_FALLBACK : apiKey.model;
+
   // Parse body
   let messages: ChatMessage[];
   let wantStream: boolean;
@@ -147,7 +175,7 @@ export async function POST(req: NextRequest) {
   }
 
   const copilotBody: Record<string, unknown> = {
-    model:    apiKey.model,
+    model:    upstreamModel,
     messages,
     stream:   wantStream,
     ...(tools          !== undefined && { tools }),
@@ -166,26 +194,42 @@ export async function POST(req: NextRequest) {
 
   // ── Streaming ─────────────────────────────────────────────────────────────
   if (wantStream) {
-    let upstream: Response;
-    try {
-      upstream = await fetchWithCopilotToken(CHAT_URL, (t) => ({
-        method:  'POST',
-        headers: { Authorization: `Bearer ${t}`, ...COPILOT_HEADERS },
-        body:    JSON.stringify(copilotBody),
-        signal:  AbortSignal.timeout(120_000),
-      }));
-    } catch (err) {
-      return NextResponse.json(
-        { error: { message: (err as Error).message, type: 'server_error' } },
-        { status: 500 },
-      );
+    let upstream: Response | null = null;
+    let upstreamErrStatus = 500;
+    let upstreamErrText = '';
+    const candidates = apiKey.model === 'auto'
+      ? uniqueModels([upstreamModel, ...AUTO_MODEL_CHAIN])
+      : [upstreamModel];
+
+    for (let i = 0; i < candidates.length; i++) {
+      const candidate = candidates[i];
+      try {
+        upstream = await fetchWithCopilotToken(CHAT_URL, (t) => ({
+          method:  'POST',
+          headers: { Authorization: `Bearer ${t}`, ...COPILOT_HEADERS },
+          body:    JSON.stringify({ ...copilotBody, model: candidate }),
+          signal:  AbortSignal.timeout(120_000),
+        }));
+      } catch (err) {
+        return NextResponse.json(
+          { error: { message: (err as Error).message, type: 'server_error' } },
+          { status: 500 },
+        );
+      }
+
+      if (upstream.ok && upstream.body) break;
+      upstreamErrStatus = upstream.status;
+      upstreamErrText = await upstream.text();
+      if (apiKey.model !== 'auto' || !shouldAutoRetry(upstream.status, upstreamErrText) || i === candidates.length - 1) {
+        upstream = null;
+        break;
+      }
     }
 
-    if (!upstream.ok || !upstream.body) {
-      const text = await upstream.text();
+    if (!upstream || !upstream.ok || !upstream.body) {
       return NextResponse.json(
-        { error: { message: `Upstream error ${upstream.status}: ${text.slice(0, 200)}`, type: 'server_error' } },
-        { status: upstream.status },
+        { error: { message: `Upstream error ${upstreamErrStatus}: ${upstreamErrText.slice(0, 200)}`, type: 'server_error' } },
+        { status: upstreamErrStatus },
       );
     }
 
@@ -203,18 +247,34 @@ export async function POST(req: NextRequest) {
 
   // ── Non-streaming ─────────────────────────────────────────────────────────
   try {
-    const res = await fetchWithCopilotToken(CHAT_URL, (t) => ({
-      method:  'POST',
-      headers: { Authorization: `Bearer ${t}`, ...COPILOT_HEADERS },
-      body:    JSON.stringify(copilotBody),
-      signal:  AbortSignal.timeout(120_000),
-    }));
+    let res: Response | null = null;
+    let errStatus = 500;
+    let errText = '';
+    const candidates = apiKey.model === 'auto'
+      ? uniqueModels([upstreamModel, ...AUTO_MODEL_CHAIN])
+      : [upstreamModel];
 
-    if (!res.ok) {
-      const errText = await res.text();
+    for (let i = 0; i < candidates.length; i++) {
+      const candidate = candidates[i];
+      res = await fetchWithCopilotToken(CHAT_URL, (t) => ({
+        method:  'POST',
+        headers: { Authorization: `Bearer ${t}`, ...COPILOT_HEADERS },
+        body:    JSON.stringify({ ...copilotBody, model: candidate }),
+        signal:  AbortSignal.timeout(120_000),
+      }));
+      if (res.ok) break;
+      errStatus = res.status;
+      errText = await res.text();
+      if (apiKey.model !== 'auto' || !shouldAutoRetry(res.status, errText) || i === candidates.length - 1) {
+        res = null;
+        break;
+      }
+    }
+
+    if (!res || !res.ok) {
       return NextResponse.json(
-        { error: { message: `Upstream error ${res.status}: ${errText.slice(0, 200)}`, type: 'server_error' } },
-        { status: res.status },
+        { error: { message: `Upstream error ${errStatus}: ${errText.slice(0, 200)}`, type: 'server_error' } },
+        { status: errStatus },
       );
     }
 

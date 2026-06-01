@@ -85,5 +85,12 @@ export async function GET(req: NextRequest) {
       owned_by: 'github-copilot',
     }));
 
-  return NextResponse.json({ object: 'list', data });
+  // Expose Copilot billing mode as a pseudo-model so OpenAI SDK clients can
+  // discover/select it via GET /v1/models just like regular model IDs.
+  const withAuto = [
+    { id: 'auto', object: 'model', created: 0, owned_by: 'github-copilot' },
+    ...data.filter(m => m.id !== 'auto'),
+  ];
+
+  return NextResponse.json({ object: 'list', data: withAuto });
 }
